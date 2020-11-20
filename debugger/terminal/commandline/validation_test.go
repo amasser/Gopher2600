@@ -12,15 +12,10 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package commandline_test
 
 import (
-	"fmt"
 	"testing"
 
 	"github.com/jetsetilly/gopher2600/debugger/terminal/commandline"
@@ -38,8 +33,6 @@ func TestValidation_required(t *testing.T) {
 	err = cmds.Validate("TEST arg foo")
 	if err == nil {
 		t.Errorf("matches but shouldn't")
-	} else {
-		fmt.Println(err)
 	}
 
 	err = cmds.Validate("TEST arg")
@@ -50,8 +43,6 @@ func TestValidation_required(t *testing.T) {
 	err = cmds.Validate("TEST")
 	if err == nil {
 		t.Errorf("matches but shouldn't")
-	} else {
-		fmt.Println(err)
 	}
 }
 
@@ -77,15 +68,26 @@ func TestValidation_optional(t *testing.T) {
 	err = cmds.Validate("TEST arg foo")
 	if err == nil {
 		t.Errorf("matches but shouldn't")
-	} else {
-		fmt.Println(err)
 	}
 
 	err = cmds.Validate("TEST foo")
 	if err == nil {
 		t.Errorf("matches but shouldn't")
-	} else {
-		fmt.Println(err)
+	}
+}
+
+func TestValidation_optional2(t *testing.T) {
+	var cmds *commandline.Commands
+	var err error
+
+	cmds, err = commandline.ParseCommandTemplate([]string{"TEST (arg [%s]|bar)"})
+	if err != nil {
+		t.Fatalf("%s", err)
+	}
+
+	err = cmds.Validate("TEST xxxxx")
+	if err == nil {
+		t.Errorf("matches but shouldn't")
 	}
 }
 
@@ -106,8 +108,6 @@ func TestValidation_branchesAndNumeric(t *testing.T) {
 	err = cmds.Validate("TEST arg")
 	if err == nil {
 		t.Errorf("matches but shouldn't")
-	} else {
-		fmt.Println(err)
 	}
 
 	// numeric argument matching
@@ -120,8 +120,6 @@ func TestValidation_branchesAndNumeric(t *testing.T) {
 	err = cmds.Validate("TEST arg bar")
 	if err == nil {
 		t.Errorf("matches but shouldn't")
-	} else {
-		fmt.Println(err)
 	}
 
 	// ---------------
@@ -134,8 +132,6 @@ func TestValidation_branchesAndNumeric(t *testing.T) {
 	err = cmds.Validate("TEST arg")
 	if err == nil {
 		t.Errorf("matches but shouldn't")
-	} else {
-		fmt.Println(err)
 	}
 
 	err = cmds.Validate("TEST arg 10")
@@ -167,8 +163,6 @@ func TestValidation_deepBranches(t *testing.T) {
 	err = cmds.Validate("TEST arg foo")
 	if err == nil {
 		t.Errorf("matches but shouldn't")
-	} else {
-		fmt.Println(err)
 	}
 }
 
@@ -267,6 +261,9 @@ func TestValidation_singluarOption(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%s", err)
 	}
+	if err != nil {
+		t.Errorf("does not parse: %s", err)
+	}
 
 	err = cmds.Validate("SCRIPT foo")
 	if err != nil {
@@ -291,8 +288,6 @@ func TestValidation_singluarOption(t *testing.T) {
 	err = cmds.Validate("SCRIPT RECORD REGRESSION foo end")
 	if err == nil {
 		t.Errorf("matches but shouldn't")
-	} else {
-		fmt.Println(err)
 	}
 }
 
@@ -300,7 +295,7 @@ func TestValidation_nestedGroups(t *testing.T) {
 	var cmds *commandline.Commands
 	var err error
 
-	cmds, err = commandline.ParseCommandTemplate([]string{"TEST [(foo)|bar]"})
+	cmds, err = commandline.ParseCommandTemplate([]string{"TEST [(foo|baz)|bar]"})
 	if err != nil {
 		t.Fatalf("%s", err)
 	}
@@ -315,8 +310,6 @@ func TestValidation_nestedGroups(t *testing.T) {
 	err = cmds.Validate("TEST wibble")
 	if err == nil {
 		t.Errorf("matches but shouldn't")
-	} else {
-		fmt.Println(err)
 	}
 
 	cmds, err = commandline.ParseCommandTemplate([]string{"TEST (foo|[bar|(baz|qux)]|wibble)"})
@@ -325,15 +318,15 @@ func TestValidation_nestedGroups(t *testing.T) {
 	}
 	err = cmds.Validate("TEST foo")
 	if err != nil {
-		t.Errorf("1 doesn't match but should: %s", err)
+		t.Errorf("doesn't match but should: %s", err)
 	}
 	err = cmds.Validate("TEST wibble")
 	if err != nil {
-		t.Errorf("2 doesn't match but should: %s", err)
+		t.Errorf("doesn't match but should: %s", err)
 	}
 	err = cmds.Validate("TEST bar")
 	if err != nil {
-		t.Errorf("3 doesn't match but should: %s", err)
+		t.Errorf("doesn't match but should: %s", err)
 	}
 }
 
@@ -401,41 +394,50 @@ func TestValidation_repeatGroups(t *testing.T) {
 	err = cmds.Validate("TEST foo bar")
 	if err == nil {
 		t.Errorf("matches but shouldn't")
-	} else {
-		fmt.Println(err)
 	}
 
 	err = cmds.Validate("TEST bar baz bar")
 	if err == nil {
 		t.Errorf("matches but shouldn't")
-	} else {
-		fmt.Println(err)
 	}
 
 	err = cmds.Validate("TEST bar baz qux qux baz wibble")
 	if err == nil {
 		t.Errorf("matches but shouldn't")
-	} else {
-		fmt.Println(err)
 	}
-
-	// the following template doesn't make sense (yet?) and should fail
 
 	cmds, err = commandline.ParseCommandTemplate([]string{"TEST {[foo]}"})
 	if err != nil {
 		t.Fatalf("%s", err)
 	}
+	err = cmds.Validate("TEST")
+	if err != nil {
+		t.Errorf("doesn't match but should: %s", err)
+	}
 	err = cmds.Validate("TEST foo")
-	if err == nil {
-		t.Errorf("matches but shouldn't")
-	} else {
-		fmt.Println(err)
+	if err != nil {
+		t.Errorf("doesn't match but should: %s", err)
 	}
 	err = cmds.Validate("TEST foo foo")
-	if err == nil {
-		t.Errorf("matches but shouldn't")
-	} else {
-		fmt.Println(err)
+	if err != nil {
+		t.Errorf("doesn't match but should: %s", err)
+	}
+
+	cmds, err = commandline.ParseCommandTemplate([]string{"TEST {(foo)}"})
+	if err != nil {
+		t.Fatalf("%s", err)
+	}
+	err = cmds.Validate("TEST")
+	if err != nil {
+		t.Errorf("doesn't match but should: %s", err)
+	}
+	err = cmds.Validate("TEST foo")
+	if err != nil {
+		t.Errorf("doesn't match but should: %s", err)
+	}
+	err = cmds.Validate("TEST foo foo")
+	if err != nil {
+		t.Errorf("doesn't match but should: %s", err)
 	}
 }
 
@@ -466,6 +468,71 @@ func TestValidation_bar(t *testing.T) {
 		t.Fatalf("%s", err)
 	}
 	err = cmds.Validate("list")
+	if err != nil {
+		t.Errorf("doesn't match but should: %s", err)
+	}
+}
+
+func TestValidation_optional_group(t *testing.T) {
+	var cmds *commandline.Commands
+	var err error
+
+	cmds, err = commandline.ParseCommandTemplate([]string{
+		"PREF [SET|NO|TOGGLE] [RANDSTART|RANDPINS]",
+	})
+	if err != nil {
+		t.Fatalf("%s", err)
+	}
+	err = cmds.Validate("pref")
+	if err == nil {
+		t.Errorf("does match but shouldn't")
+	}
+
+	err = cmds.Validate("pref set")
+	if err == nil {
+		t.Errorf("does match but shouldn't")
+	}
+
+	err = cmds.Validate("pref set randstart")
+	if err != nil {
+		t.Errorf("doesn't match but should: %s", err)
+	}
+
+	// same as above except that the required argument sequence (in its
+	// entirity) is optional
+
+	cmds, err = commandline.ParseCommandTemplate([]string{
+		"PREF ([SET|NO|TOGGLE] [RANDSTART|RANDPINS])",
+	})
+	if err != nil {
+		t.Errorf("does not parse: %s", err)
+	}
+
+	err = cmds.Validate("pref")
+	if err != nil {
+		t.Errorf("doesn't match but should: %s", err)
+	}
+
+	err = cmds.Validate("pref set")
+	if err == nil {
+		t.Errorf("does match but shouldn't")
+	}
+
+	err = cmds.Validate("pref set randstart")
+	if err != nil {
+		t.Errorf("doesn't match but should: %s", err)
+	}
+}
+
+func TestValidation_BREAK_style(t *testing.T) {
+	var cmds *commandline.Commands
+	var err error
+
+	cmds, err = commandline.ParseCommandTemplate([]string{"YYYYY [%s %n| %s] {& %s %n|& %s}"})
+	if err != nil {
+		t.Fatalf("%s", err)
+	}
+	err = cmds.Validate("YYYYY SL 100")
 	if err != nil {
 		t.Errorf("doesn't match but should: %s", err)
 	}

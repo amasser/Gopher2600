@@ -12,10 +12,6 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 // Package wavwriter allows writing of audio data to disk as a WAV file.
 package wavwriter
@@ -23,51 +19,61 @@ package wavwriter
 import (
 	"os"
 
-	"github.com/jetsetilly/gopher2600/errors"
+	"github.com/jetsetilly/gopher2600/curated"
 	tiaAudio "github.com/jetsetilly/gopher2600/hardware/tia/audio"
 
 	"github.com/go-audio/audio"
 	"github.com/go-audio/wav"
 )
 
-// WavWriter implements the television.AudioMixer interface
+// WavWriter implements the television.AudioMixer interface.
 type WavWriter struct {
 	filename string
 	buffer   []int8
 }
 
-// New is the preferred method of initialisation for the Audio2Wav type
+// New is the preferred method of initialisation for the Audio2Wav type.
 func New(filename string) (*WavWriter, error) {
 	aw := &WavWriter{
 		filename: filename,
-		buffer:   make([]int8, 0, 0),
+		buffer:   make([]int8, 0),
 	}
 
 	return aw, nil
 }
 
-// SetAudio implements the television.AudioMixer interface
+// SetAudio implements the television.AudioMixer interface.
 func (aw *WavWriter) SetAudio(audioData uint8) error {
 	// bring audioData into the correct range
 	aw.buffer = append(aw.buffer, int8(int16(audioData)-127))
 	return nil
 }
 
-// EndMixing implements the television.AudioMixer interface
-func (aw *WavWriter) EndMixing() error {
+// EndMixing implements the television.AudioMixer interface.
+func (aw *WavWriter) EndMixing() (rerr error) {
 	f, err := os.Create(aw.filename)
 	if err != nil {
-		return errors.New(errors.WavWriter, err)
+		return curated.Errorf("wavwriter: %v", err)
 	}
-	defer f.Close()
+	defer func() {
+		err := f.Close()
+		if err != nil {
+			rerr = curated.Errorf("wavwriter: %v", err)
+		}
+	}()
 
 	// see audio commentary in sdlplay package for thinking around sample rates
 
 	enc := wav.NewEncoder(f, tiaAudio.SampleFreq, 8, 1, 1)
 	if enc == nil {
-		return errors.New(errors.WavWriter, "bad parameters for wav encoding")
+		return curated.Errorf("wavwriter: %v", "bad parameters for wav encoding")
 	}
-	defer enc.Close()
+	defer func() {
+		err := enc.Close()
+		if err != nil {
+			rerr = curated.Errorf("wavwriter: %v", err)
+		}
+	}()
 
 	buf := audio.PCMBuffer{
 		Format: &audio.Format{
@@ -81,7 +87,7 @@ func (aw *WavWriter) EndMixing() error {
 
 	err = enc.Write(buf.AsIntBuffer())
 	if err != nil {
-		return errors.New(errors.WavWriter, err)
+		return curated.Errorf("wavwriter: %v", err)
 	}
 
 	return nil

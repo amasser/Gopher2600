@@ -12,10 +12,6 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 // Package audio implements the audio generation of the TIA. The implementation
 // is taken almost directly from Ron Fries' original implementation, found in
@@ -26,7 +22,7 @@
 // cycle, returning a new sample every 114th video clock. The TIA_Process()
 // function in Frie's implementation meanwhile is called to fill a buffer. The
 // samepl buffer in this emulation must sit outside of the TIA emulation and
-// somwhere inside the television implementation. TIASound.c is published under
+// somewhere inside the television implementation. TIASound.c is published under
 // the GNU Library GPL v2.0
 //
 // Some modifications were made to Fries' alogorithm in accordance to similar

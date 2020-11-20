@@ -12,26 +12,22 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package database
 
 import (
 	"fmt"
 
-	"github.com/jetsetilly/gopher2600/errors"
+	"github.com/jetsetilly/gopher2600/curated"
 )
 
-// Deserialiser extracts/converts fields from a SerialisedEntry
+// Deserialiser extracts/converts fields from a SerialisedEntry.
 type Deserialiser func(fields SerialisedEntry) (Entry, error)
 
-// SerialisedEntry is the Entry data represented as an array of strings
+// SerialisedEntry is the Entry data represented as an array of strings.
 type SerialisedEntry []string
 
-// Entry represents the generic entry in the database
+// Entry represents the generic entry in the database.
 type Entry interface {
 	// ID returns the string that is used to identify the entry type in
 	// the database
@@ -54,7 +50,7 @@ type Entry interface {
 func (db *Session) RegisterEntryType(id string, des Deserialiser) error {
 	if _, ok := db.entryTypes[id]; ok {
 		msg := fmt.Sprintf("trying to register a duplicate entry ID [%s]", id)
-		return errors.New(errors.DatabaseError, msg)
+		return curated.Errorf("database: %v", msg)
 	}
 	db.entryTypes[id] = des
 	return nil

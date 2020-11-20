@@ -12,14 +12,10 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package memorymap
 
-// Area represents the different areas of memory
+// Area represents the different areas of memory.
 type Area int
 
 func (a Area) String() string {
@@ -37,7 +33,7 @@ func (a Area) String() string {
 	return "undefined"
 }
 
-// The different memory areas in the VCS
+// The different memory areas in the VCS.
 const (
 	Undefined Area = iota
 	TIA
@@ -54,34 +50,60 @@ const (
 // down into the the range of an array. This can be done by with elegantly with
 // (address^origin) rather than subtraction.
 const (
-	OriginTIA  = uint16(0x0000)
-	MemtopTIA  = uint16(0x003f)
-	OriginRAM  = uint16(0x0080)
-	MemtopRAM  = uint16(0x00ff)
-	OriginRIOT = uint16(0x0280)
-	MemtopRIOT = uint16(0x0297)
-	OriginCart = uint16(0x1000)
-	MemtopCart = uint16(0x1fff)
+	OriginTIA      = uint16(0x0000)
+	MemtopTIA      = uint16(0x003f)
+	OriginRAM      = uint16(0x0080)
+	MemtopRAM      = uint16(0x00ff)
+	OriginRIOT     = uint16(0x0280)
+	MemtopRIOT     = uint16(0x0297)
+	OriginCart     = uint16(0x1000)
+	MemtopCart     = uint16(0x1fff)
+	OriginAbsolute = uint16(0x0000)
+	MemtopAbsolute = uint16(0xffff)
+)
+
+// Cartridge memory is mirrored in a number of places in the address space. The
+// most useful mirror is the Fxxx mirror which many programmers use when
+// writing assembly programs. The following constants are used by the
+// disassembly package to reference the disassembly to the Fxxx mirror.
+//
+// Be extra careful when looping with MemtopCartFxxxMirror because it is at the
+// very edge of uint16. Limit detection may need to consider the overflow
+// conditions.
+const (
+	OriginCartFxxxMirror = uint16(0xf000)
+	MemtopCartFxxxMirror = uint16(0xffff)
 )
 
 // Memtop is the top most address of memory in the VCS. It is the same as the
 // cartridge memtop.
 const Memtop = uint16(0x1fff)
 
-// Adressess in the RIOT and TIA areas that are being used to read from from
-// memory require an additional transformation
+// CartridgeBits identifies the bits in an address that are relevant to the
+// cartridge address. Useful for discounting those bits that determine the
+// cartridge mirror. For example, the following will be true:
+//
+//	0x1123 & CartridgeBits == 0xf123 & CartridgeBits
+//
+// Alternatively, the following is an effective way to index an array:
+//
+//  addr := 0xf000
+//  mem[addr & CartridgeBits] = 0xff
+//
+// In the example, index zero of the mem array is assigned the value 0xff.
 const (
-	AddressMaskRIOT = uint16(0x02f7)
-	AddressMaskTIA  = uint16(0x000f)
+	CartridgeBits = OriginCart ^ MemtopCart
 )
 
-// The top nibble of a cartridge address can be anything. AddressMaskCart takes
-// away the uninteresting bits
-//
-// Good way of normalising cartridge addresses to start from 0x000 (useful for
-// arrays) *if* you know that the address is for certain a cartridge address
+// The masks to apply to an address to bring any address into the primary
+// range. Prefer to use MapAddress() for ease of use.
 const (
-	AddressMaskCart = MemtopCart ^ OriginCart
+	MaskCart      = MemtopCart
+	MaskReadRIOT  = uint16(0x0287)
+	MaskWriteRIOT = MemtopRIOT
+	MaskRAM       = MemtopRAM
+	MaskReadTIA   = uint16(0x000f)
+	MaskWriteTIA  = MemtopTIA
 )
 
 // MapAddress translates the address argument from mirror space to primary
@@ -92,30 +114,31 @@ func MapAddress(address uint16, read bool) (uint16, Area) {
 
 	// cartridge addresses
 	if address&OriginCart == OriginCart {
-		return address & MemtopCart, Cartridge
+		return address & MaskCart, Cartridge
 	}
 
 	// RIOT addresses
 	if address&OriginRIOT == OriginRIOT {
 		if read {
-			return address & MemtopRIOT & AddressMaskRIOT, RIOT
+			return address & MaskReadRIOT, RIOT
 		}
-		return address & MemtopRIOT, RIOT
+		return address & MaskWriteRIOT, RIOT
 	}
 
 	// RAM addresses
 	if address&OriginRAM == OriginRAM {
-		return address & MemtopRAM, RAM
+		return address & MaskRAM, RAM
 	}
 
 	// everything else is in TIA space
 	if read {
-		return address & MemtopTIA & AddressMaskTIA, TIA
+		return address & MaskReadTIA, TIA
 	}
 
-	return address & MemtopTIA, TIA
+	return address & MaskWriteTIA, TIA
 }
 
+// IsArea returns true if the address is in the specificied area.
 func IsArea(address uint16, area Area) bool {
 	_, a := MapAddress(address, true)
 	return area == a

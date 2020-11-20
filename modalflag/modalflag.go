@@ -12,10 +12,6 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package modalflag
 
@@ -75,12 +71,12 @@ func (md *Modes) Mode() string {
 	return md.path[len(md.path)-1]
 }
 
-// Path returns a string all the modes encountered during parsing
+// Path returns a string all the modes encountered during parsing.
 func (md *Modes) Path() string {
 	return strings.Join(md.path, modeSeparator)
 }
 
-// NewArgs with a string of arguments (from the command line for example)
+// NewArgs with a string of arguments (from the command line for example).
 func (md *Modes) NewArgs(args []string) {
 	// initialise args
 	md.args = args
@@ -99,7 +95,7 @@ func (md *Modes) NewMode() {
 }
 
 // AdditionalHelp allows you to add extensive help text to be displayed in
-// addition to the regular help on available flags
+// addition to the regular help on available flags.
 func (md *Modes) AdditionalHelp(help string) {
 	md.additionalHelp = help
 }
@@ -111,22 +107,22 @@ func (md *Modes) Parsed() bool {
 	return md.parsed
 }
 
-// ParseResult is returned from the Parse() function
+// ParseResult is returned from the Parse() function.
 type ParseResult int
 
-// a list of valid ParseResult values
+// a list of valid ParseResult values.
 const (
 	// Continue with command line processing. How this result should be
 	// interpreted depends on the context, which the caller of the Parse()
 	// function knows best. However, generally we can say that if sub-modes
-	// were specified in the preceeding call to NewMode() then the Mode field
+	// were specified in the preceding call to NewMode() then the Mode field
 	// of the Modes struct should be checked.
 	ParseContinue ParseResult = iota
 
-	// Help was requested and has been printed
+	// Help was requested and has been printed.
 	ParseHelp
 
-	// an error has occurred and is returned as the second return value
+	// an error has occurred and is returned as the second return value.
 	ParseError
 )
 
@@ -176,38 +172,36 @@ func (md *Modes) Parse() (ParseResult, error) {
 		} else {
 			return ParseError, err
 		}
-	} else {
-		if len(md.subModes) > 0 {
-			arg := strings.ToUpper(md.flags.Arg(0))
+	} else if len(md.subModes) > 0 {
+		arg := strings.ToUpper(md.flags.Arg(0))
 
-			// check to see if the single argument is in the list of modes,
-			// starting off assuming it isn't
-			mode := md.subModes[0]
-			for i := range md.subModes {
-				if md.subModes[i] == arg {
-					// found matching sub-mode
-					mode = arg
-					md.argsIdx++
-					break // for loop
-				}
+		// check to see if the single argument is in the list of modes,
+		// starting off assuming it isn't
+		mode := md.subModes[0]
+		for i := range md.subModes {
+			if md.subModes[i] == arg {
+				// found matching sub-mode
+				mode = arg
+				md.argsIdx++
+				break // for loop
 			}
-
-			// add mode (either one we've found or the default) and add it to
-			// the path
-			md.path = append(md.path, mode)
 		}
+
+		// add mode (either one we've found or the default) and add it to
+		// the path
+		md.path = append(md.path, mode)
 	}
 
 	return ParseContinue, nil
 }
 
 // RemainingArgs after a call to Parse() ie. arguments that aren't flags or a
-// listed sub-mode
+// listed sub-mode.
 func (md *Modes) RemainingArgs() []string {
 	return md.flags.Args()
 }
 
-// GetArg returns the numbered argument that isn't a flag or listed sub-mode
+// GetArg returns the numbered argument that isn't a flag or listed sub-mode.
 func (md *Modes) GetArg(i int) string {
 	return md.flags.Arg(i)
 }
@@ -224,47 +218,47 @@ func (md *Modes) AddSubModes(submodes ...string) {
 	}
 }
 
-// AddDefaultSubMode to list of sub-modes
+// AddDefaultSubMode to list of sub-modes.
 func (md *Modes) AddDefaultSubMode(defSubMode string) {
 	md.subModes = append([]string{defSubMode}, md.subModes...)
 }
 
-// AddBool flag for next call to Parse()
+// AddBool flag for next call to Parse().
 func (md *Modes) AddBool(name string, value bool, usage string) *bool {
 	return md.flags.Bool(name, value, usage)
 }
 
-// AddDuration flag for next call to Parse()
+// AddDuration flag for next call to Parse().
 func (md *Modes) AddDuration(name string, value time.Duration, usage string) *time.Duration {
 	return md.flags.Duration(name, value, usage)
 }
 
-// AddFloat64 flag for next call to Parse()
+// AddFloat64 flag for next call to Parse().
 func (md *Modes) AddFloat64(name string, value float64, usage string) *float64 {
 	return md.flags.Float64(name, value, usage)
 }
 
-// AddInt flag for next call to Parse()
+// AddInt flag for next call to Parse().
 func (md *Modes) AddInt(name string, value int, usage string) *int {
 	return md.flags.Int(name, value, usage)
 }
 
-// AddInt64 flag for next call to Parse()
+// AddInt64 flag for next call to Parse().
 func (md *Modes) AddInt64(name string, value int64, usage string) *int64 {
 	return md.flags.Int64(name, value, usage)
 }
 
-// AddString flag for next call to Parse()
+// AddString flag for next call to Parse().
 func (md *Modes) AddString(name string, value string, usage string) *string {
 	return md.flags.String(name, value, usage)
 }
 
-// AddUint flag for next call to Parse()
+// AddUint flag for next call to Parse().
 func (md *Modes) AddUint(name string, value uint, usage string) *uint {
 	return md.flags.Uint(name, value, usage)
 }
 
-// AddUint64 flag for next call to Parse()
+// AddUint64 flag for next call to Parse().
 func (md *Modes) AddUint64(name string, value uint64, usage string) *uint64 {
 	return md.flags.Uint64(name, value, usage)
 }

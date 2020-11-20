@@ -12,10 +12,6 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package hardware
 
@@ -29,8 +25,6 @@ func (vcs *VCS) Step(videoCycleCallback func() error) error {
 	if videoCycleCallback == nil {
 		videoCycleCallback = nullVideoCycleCallback
 	}
-
-	var err error
 
 	// the videoCycle function defines the order of operation for the rest of
 	// the VCS for every CPU cycle. the function block represents the ϕ0 cycle
@@ -63,8 +57,9 @@ func (vcs *VCS) Step(videoCycleCallback func() error) error {
 	// I don't believe any visual or audible artefacts of the VCS (undocumented
 	// or not) rely on the details of the CPU-TIA relationship.
 	videoCycle := func() error {
-		// ensure controllers have updated their input
-		if err := vcs.checkDeviceInput(); err != nil {
+		// probe for playback events
+		err := vcs.RIOT.Ports.GetPlayback()
+		if err != nil {
 			return err
 		}
 
@@ -101,11 +96,12 @@ func (vcs *VCS) Step(videoCycleCallback func() error) error {
 		}
 
 		vcs.RIOT.Step()
+		vcs.Mem.Cart.Step()
 
 		return nil
 	}
 
-	err = vcs.CPU.ExecuteInstruction(videoCycle)
+	err := vcs.CPU.ExecuteInstruction(videoCycle)
 	if err != nil {
 		return err
 	}

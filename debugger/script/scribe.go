@@ -12,10 +12,6 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package script
 
@@ -24,7 +20,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/jetsetilly/gopher2600/errors"
+	"github.com/jetsetilly/gopher2600/curated"
 )
 
 // Scribe can be used again after a start()/end() cycle. isWriting()
@@ -42,15 +38,15 @@ type Scribe struct {
 	outputLine string
 }
 
-// IsActive returns true if a script is currently being capture
+// IsActive returns true if a script is currently being capture.
 func (scr Scribe) IsActive() bool {
 	return scr.file != nil
 }
 
-// StartSession a new script
+// StartSession a new script.
 func (scr *Scribe) StartSession(scriptfile string) error {
 	if scr.IsActive() {
-		return errors.New(errors.ScriptScribeError, "already active")
+		return curated.Errorf("script scribe already active")
 	}
 
 	scr.scriptfile = scriptfile
@@ -59,17 +55,17 @@ func (scr *Scribe) StartSession(scriptfile string) error {
 	if os.IsNotExist(err) {
 		scr.file, err = os.Create(scriptfile)
 		if err != nil {
-			return errors.New(errors.ScriptScribeError, "cannot create new script file")
+			return curated.Errorf("cannot create new script file")
 		}
 	} else {
-		return errors.New(errors.ScriptScribeError, "file already exists")
+		return curated.Errorf("file already exists")
 	}
 
 	return nil
 }
 
-// EndSession the current scribe session
-func (scr *Scribe) EndSession() error {
+// EndSession the current scribe session.
+func (scr *Scribe) EndSession() (rerr error) {
 	if !scr.IsActive() {
 		return nil
 	}
@@ -82,39 +78,50 @@ func (scr *Scribe) EndSession() error {
 		scr.outputLine = ""
 	}()
 
+	defer func() {
+		err := scr.file.Close()
+		if err != nil {
+			rerr = curated.Errorf("script: scripe: %v", err)
+		}
+	}()
+
 	// make sure everything has been written to the output file
+	return scr.Commit()
+}
+
+// StartPlayback indicates that a replayed script has begun.
+func (scr *Scribe) StartPlayback() error {
+	if !scr.IsActive() {
+		return nil
+	}
+
 	err := scr.Commit()
-
-	// if commit() causes an error, continue with the Close() operation and
-	// return the commit() error if the close succeeds
-
-	errClose := scr.file.Close()
-	if errClose != nil {
-		return errors.New(errors.ScriptScribeError, errClose)
+	if err != nil {
+		return err
 	}
 
-	return err
-}
-
-// StartPlayback indicates that a replayed script has begun
-func (scr *Scribe) StartPlayback() {
-	if !scr.IsActive() {
-		return
-	}
-	scr.Commit()
 	scr.playbackDepth++
+
+	return nil
 }
 
-// EndPlayback indicates that a replayed script has finished
-func (scr *Scribe) EndPlayback() {
+// EndPlayback indicates that a replayed script has finished.
+func (scr *Scribe) EndPlayback() error {
 	if !scr.IsActive() {
-		return
+		return nil
 	}
-	scr.Commit()
+
+	err := scr.Commit()
+	if err != nil {
+		return err
+	}
+
 	scr.playbackDepth--
+
+	return nil
 }
 
-// Rollback undoes calls to WriteInput() and WriteOutput since last Commit()
+// Rollback undoes calls to WriteInput() and WriteOutput since last Commit().
 func (scr *Scribe) Rollback() {
 	if !scr.IsActive() {
 		return
@@ -124,19 +131,25 @@ func (scr *Scribe) Rollback() {
 	scr.outputLine = ""
 }
 
-// WriteInput writes user-input to the open script file
-func (scr *Scribe) WriteInput(command string) {
+// WriteInput writes user-input to the open script file.
+func (scr *Scribe) WriteInput(command string) error {
 	if !scr.IsActive() || scr.playbackDepth > 0 {
-		return
+		return nil
 	}
 
-	scr.Commit()
+	err := scr.Commit()
+	if err != nil {
+		return err
+	}
+
 	if command != "" {
 		scr.inputLine = fmt.Sprintf("%s\n", command)
 	}
+
+	return nil
 }
 
-// Commit most scrent calls to WriteInput() and WriteOutput()
+// Commit most recent calls to WriteInput() and WriteOutput().
 func (scr *Scribe) Commit() error {
 	if !scr.IsActive() {
 		return nil
@@ -150,20 +163,20 @@ func (scr *Scribe) Commit() error {
 	if scr.inputLine != "" {
 		n, err := io.WriteString(scr.file, scr.inputLine)
 		if err != nil {
-			return errors.New(errors.ScriptScribeError, err)
+			return curated.Errorf("script: scribe: %v", err)
 		}
 		if n != len(scr.inputLine) {
-			return errors.New(errors.ScriptScribeError, "output truncated")
+			return curated.Errorf("script: scribe output truncated")
 		}
 	}
 
 	if scr.outputLine != "" {
 		n, err := io.WriteString(scr.file, scr.outputLine)
 		if err != nil {
-			return errors.New(errors.ScriptScribeError, err)
+			return curated.Errorf("script: scribe: %v", err)
 		}
 		if n != len(scr.outputLine) {
-			return errors.New(errors.ScriptScribeError, "output truncated")
+			return curated.Errorf("script: scribe output truncated")
 		}
 	}
 

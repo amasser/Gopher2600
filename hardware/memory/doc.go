@@ -12,10 +12,6 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 // Package memory implements the Atari VCS memory model. The addresses and
 // memory sub-packages help with this.
@@ -61,17 +57,23 @@
 // with memory areas added is as follows:
 //
 //
-//	                           ==== TIA ---- chip bus ---- TIA
+//	                           ===* TIA ---- chip bus ---- TIA
 //	                          |
-//	                          |==== RIOT ---- chip bus ---- RIOT
-//	    CPU ---- cpu bus ---- *
-//	                          |==== PIA RAM
+//	                          |===* RIOT ---- chip bus ---- RIOT
+//	    CPU ---- cpu bus -----
+//	                          |===* PIA RAM
 //	                          |
 //	                           ==== Cartridge
 //
 //
 // The asterisk indicates that addresses used by the CPU are mapped to the
-// primary address. The memorymap package contains more detail on this.
+// primary mirror address. The memorymap package contains more detail on this.
+//
+// Cartridge memory is accessed by whatever mirror address the CPU wants. This
+// is because some cartridge formats might be sensitive to which mirror is
+// being used (eg. Supercharger). Cartridges also implement a Listen()
+// function. This is a special function outside of the bussing system. See
+// cartridge package for details.
 //
 // Note that the RIOT registers and PIA RAM are all part of the same hardware
 // package, the PIA 6532. However, for our purposes the two memory areas are

@@ -12,10 +12,6 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package debugger_test
 
@@ -48,7 +44,7 @@ func (trm *mockTerm) testWatches() {
 	trm.sndInput("CLEAR WATCHES")
 	trm.cmpOutput("watches cleared")
 
-	// no watches after succesful clear
+	// no watches after successful clear
 	trm.sndInput("LIST WATCHES")
 	trm.cmpOutput("no watches")
 
@@ -57,7 +53,7 @@ func (trm *mockTerm) testWatches() {
 	trm.cmpOutput("invalid watch address: VSYNC")
 
 	// add address by symbol. no read/write modifier means it tries
-	trm.sndInput("WATCH VSYNC")
+	trm.sndInput("WATCH WRITE VSYNC")
 	trm.cmpOutput("")
 
 	// last item in list watches should be the new entry
@@ -66,7 +62,7 @@ func (trm *mockTerm) testWatches() {
 
 	// add address by symbol. no read/write modifier means it tries
 	// plus a specific value
-	trm.sndInput("WATCH VSYNC 0x1")
+	trm.sndInput("WATCH WRITE VSYNC 0x1")
 	trm.cmpOutput("")
 
 	// last item in list watches should be the new entry

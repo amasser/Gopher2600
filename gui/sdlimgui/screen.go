@@ -12,10 +12,6 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package sdlimgui
 
@@ -24,84 +20,83 @@ import (
 	"image/color"
 	"sync"
 
-	"github.com/jetsetilly/gopher2600/television"
-	"github.com/jetsetilly/gopher2600/test"
-
-	"github.com/go-gl/gl/v3.2-core/gl"
+	"github.com/jetsetilly/gopher2600/gui"
+	"github.com/jetsetilly/gopher2600/hardware/television/signal"
+	"github.com/jetsetilly/gopher2600/hardware/television/specification"
+	"github.com/jetsetilly/gopher2600/reflection"
 )
 
-const (
-	pixelWidth = 2
-	defScaling = 2.0
-)
+// textureRenderers should consider that the timing of the VCS produces
+// "pixels" of two pixels across.
+const pixelWidth = 2
 
-// screen implements television.PixelRenderer
+// textureRenderers can share the underlying pixels of the screen type instance.
+type textureRenderers interface {
+	render()
+	resize()
+}
+
+// screen implements television.PixelRenderer.
 type screen struct {
-	img *SdlImgui
-
+	img  *SdlImgui
 	crit screenCrit
 
-	// which set of pixels to use: cropped or unmasked
-	cropped bool
-
-	// the basic amount by which the image should be scaled. image width
-	// is also scaled by pixelWidth and aspectBias value
-	scaling float32
+	// list of renderers to call from render. renderers are added with
+	// addTextureRenderer()
+	renderers []textureRenderers
 
 	// aspect bias is taken from the television specification
 	aspectBias float32
 
-	// create texture on the next call of render
-	createTextures bool
-
-	// the tv screen texture
-	screenTexture uint32
-
-	// whether to use the alternative pixel layer
-	useAltPixels bool
-
-	// the color of the screen cursor
-	cursorRGB          color.RGBA
-	offScreenCursorRGB color.RGBA
+	// the mouse coords used in the most recent call to PushGotoCoords(). only
+	// read/write by the GUI thread so doesn't need to be in critical section.
+	gotoCoordsX int
+	gotoCoordsY int
 }
 
 // for clarity, variables accessed in the critical section are encapsulated in
-// their own subtype
+// their own subtype.
 type screenCrit struct {
 	// critical sectioning
-	section sync.RWMutex
+	section sync.Mutex
+
+	// copy of the spec being used by the TV. the TV notifies us through the
+	// Resize() function
+	spec specification.Spec
+
+	// whether the current frame was generated from a stable television state
+	isStable bool
 
 	// current values for *playable* area of the screen
 	topScanline int
 	scanlines   int
 
-	// pixels and altPixels should be constructed exactly the same. the only
-	// difference is the colors
-	pixels    *image.RGBA
-	altPixels *image.RGBA
+	// the pixels array is used in the presentation texture of the play and
+	// debug screen.
+	pixels *image.RGBA
 
-	// in addition to the unmasked pixel array we also maintain and draw to a
-	// smaller pixel array that represents the masked screen. ideally, we would
-	// only have the masked pixel array defined above, and to draw only a
-	// selected group of pixels when drawing a masked screen. however, there's
-	// no good way of doing this because gl.TexSubImage2d() expects the pixels
-	// in the pixel array to be contiguous. this seems wasteful (and possibly
-	// is) but it is easier and ultimately quicker to maintain two sets of
-	// arrays (according to my current understanding that is)
-	//
-	// this is obviously slower than writing to one set of pixels but not
-	// noticably so when SetRGBA() is used (rather than Set() which includes a
-	// needless conversion to RGBA format)
-	//
-	// why not just write to one set or the other depending on whether masking
-	// is activated or not? because we want to be able to flip between masked
-	// and unmapsed displays even when paused.
-	//
-	// would it be better to have two textures one which is "full" size and one
-	// which "zooms" on the pixels in the non-masked area of the screen? maybe,
-	// but it seems messy to me by comparison.
-	croppedPixels    *image.RGBA
-	croppedAltPixels *image.RGBA
+	// backingPixels are what we plot pixels to while we wait for a frame to
+	// complete.
+	backingPixels       *image.RGBA
+	backingPixelsUpdate bool
+
+	// element colors and overlay colors are only used in the debugger so we
+	// don't need to replicate the "backing pixels" idea.
+	elementPixels *image.RGBA
+	overlayPixels *image.RGBA
+
+	// the selected overlay
+	overlay string
+
+	// 2d array of disasm entries. resized at the same time as overlayPixels resize
+	reflection [][]reflection.Reflection
+
+	// the cropped view of the screen pixels. note that these instances are
+	// created through the SubImage() command and should not be written to
+	// directly
+	cropPixels        *image.RGBA
+	cropElementPixels *image.RGBA
+	cropOverlayPixels *image.RGBA
 
 	// the coordinates of the last SetPixel(). used to help set the alpha
 	// channel when emulation is paused
@@ -110,291 +105,245 @@ type screenCrit struct {
 }
 
 func newScreen(img *SdlImgui) *screen {
-	scr := &screen{
-		img:                img,
-		scaling:            defScaling,
-		cropped:            true,
-		cursorRGB:          color.RGBA{255, 255, 255, 255},
-		offScreenCursorRGB: color.RGBA{0, 0, 255, 255},
-	}
-
-	// set texture, creation of textures will be done after every call to resize()
-	gl.ActiveTexture(gl.TEXTURE0)
-	gl.GenTextures(1, &scr.screenTexture)
-	gl.BindTexture(gl.TEXTURE_2D, scr.screenTexture)
-	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
-	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST)
+	scr := &screen{img: img}
 
 	// start off by showing entirity of NTSC screen
-	scr.resize(television.SpecNTSC.ScanlineTop, television.SpecNTSC.ScanlinesVisible)
+	scr.resize(specification.SpecNTSC, specification.SpecNTSC.ScanlineTop, specification.SpecNTSC.ScanlinesVisible)
 
 	scr.crit.lastX = 0
 	scr.crit.lastY = 0
-	scr.pause(true)
+	scr.crit.overlay = reflection.OverlayList[0]
 
 	return scr
 }
 
-// resize() is called by Resize() or resizeThread() depending on thread context
-func (scr *screen) resize(topScanline int, visibleScanlines int) error {
-	scr.crit.section.RLock()
+// resize() is called by Resize() or resizeThread() depending on thread context.
+func (scr *screen) resize(spec specification.Spec, topScanline int, visibleScanlines int) {
+	// never resize below the visible scanlines according to the specification
+	if visibleScanlines < spec.ScanlinesVisible {
+		return
+	}
 
+	scr.crit.section.Lock()
+	// we need to be careful with this lock (so no defer)
+
+	// do nothing if resize values are the same as previously
+	if scr.crit.spec.ID == spec.ID && scr.crit.topScanline == topScanline && scr.crit.scanlines == visibleScanlines {
+		scr.crit.section.Unlock()
+		return
+	}
+
+	scr.crit.spec = spec
 	scr.crit.topScanline = topScanline
 	scr.crit.scanlines = visibleScanlines
 
-	scr.crit.pixels = image.NewRGBA(image.Rect(0, 0, television.HorizClksScanline, scr.img.tv.GetSpec().ScanlinesTotal))
-	scr.crit.altPixels = image.NewRGBA(image.Rect(0, 0, television.HorizClksScanline, scr.img.tv.GetSpec().ScanlinesTotal))
+	scr.crit.pixels = image.NewRGBA(image.Rect(0, 0, specification.HorizClksScanline, spec.ScanlinesTotal))
+	scr.crit.backingPixels = image.NewRGBA(image.Rect(0, 0, specification.HorizClksScanline, spec.ScanlinesTotal))
+	scr.crit.elementPixels = image.NewRGBA(image.Rect(0, 0, specification.HorizClksScanline, spec.ScanlinesTotal))
+	scr.crit.overlayPixels = image.NewRGBA(image.Rect(0, 0, specification.HorizClksScanline, spec.ScanlinesTotal))
 
-	scr.crit.croppedPixels = image.NewRGBA(image.Rect(0, 0, television.HorizClksVisible, scr.crit.scanlines))
-	scr.crit.croppedAltPixels = image.NewRGBA(image.Rect(0, 0, television.HorizClksVisible, scr.crit.scanlines))
+	// allocate reflection info
+	scr.crit.reflection = make([][]reflection.Reflection, specification.HorizClksScanline)
+	for x := 0; x < specification.HorizClksScanline; x++ {
+		scr.crit.reflection[x] = make([]reflection.Reflection, spec.ScanlinesTotal)
+	}
 
-	// releasing lock before calling SetPixels() and SetAltPixels() below
-	scr.crit.section.RUnlock()
+	// create a cropped image from the main
+	r := image.Rect(
+		specification.HorizClksHBlank, scr.crit.topScanline,
+		specification.HorizClksHBlank+specification.HorizClksVisible, scr.crit.topScanline+scr.crit.scanlines,
+	)
+	scr.crit.cropPixels = scr.crit.pixels.SubImage(r).(*image.RGBA)
+	scr.crit.cropElementPixels = scr.crit.elementPixels.SubImage(r).(*image.RGBA)
+	scr.crit.cropOverlayPixels = scr.crit.overlayPixels.SubImage(r).(*image.RGBA)
 
 	// clear pixels
 	for y := 0; y < scr.crit.pixels.Bounds().Size().Y; y++ {
 		for x := 0; x < scr.crit.pixels.Bounds().Size().X; x++ {
-			scr.SetPixel(x, y, 0, 0, 0, false)
-			scr.SetAltPixel(x, y, 0, 0, 0, false)
+			scr.crit.pixels.SetRGBA(x, y, color.RGBA{0, 0, 0, 255})
+			scr.crit.elementPixels.SetRGBA(x, y, color.RGBA{0, 0, 0, 255})
+			scr.crit.overlayPixels.SetRGBA(x, y, color.RGBA{0, 0, 0, 255})
+			scr.crit.backingPixels.SetRGBA(x, y, color.RGBA{0, 0, 0, 255})
 		}
 	}
 
-	scr.aspectBias = scr.img.tv.GetSpec().AspectBias
+	// end critical section
+	scr.crit.section.Unlock()
 
-	// defer re-creation of texture to render(). we have to do it in the
-	// #mainthread so we may as wait until that function is called
-	scr.createTextures = true
+	// update aspect-bias value
+	scr.aspectBias = spec.AspectBias
 
-	return nil
-}
-
-func (scr *screen) scaledWidth() float32 {
-	return float32(scr.crit.croppedPixels.Bounds().Size().X*pixelWidth) * scr.aspectBias * scr.scaling
-}
-
-func (scr *screen) scaledHeight() float32 {
-	return float32(scr.crit.croppedPixels.Bounds().Size().Y) * scr.scaling
-}
-
-// render is called by service loop
-func (scr *screen) render() {
-	scr.crit.section.RLock()
-	defer scr.crit.section.RUnlock()
-
-	var pixels *image.RGBA
-	if scr.useAltPixels {
-		if scr.cropped {
-			pixels = scr.crit.croppedAltPixels
-		} else {
-			pixels = scr.crit.altPixels
-		}
-	} else {
-		if scr.cropped {
-			pixels = scr.crit.croppedPixels
-		} else {
-			pixels = scr.crit.pixels
-		}
+	// resize texture renderers
+	for _, r := range scr.renderers {
+		r.resize()
 	}
-
-	// if frame rate is below a given threshold then fake a pause image. we
-	// don't want to do this with too high of a threshold though because it
-	// would just look like weird
-	var pixelsCp []uint8
-	if scr.img.lazy.TV.ReqFPS < 3.0 {
-		copy(pixelsCp, pixels.Pix)
-		scr.pause(true)
-	}
-
-	if scr.createTextures {
-		scr.createTextures = false
-		gl.ActiveTexture(gl.TEXTURE0)
-		gl.TexImage2D(gl.TEXTURE_2D, 0,
-			gl.RGBA, int32(pixels.Bounds().Size().X), int32(pixels.Bounds().Size().Y), 0,
-			gl.RGBA, gl.UNSIGNED_BYTE,
-			gl.Ptr(pixels.Pix))
-
-	} else {
-		gl.ActiveTexture(gl.TEXTURE0)
-		gl.TexSubImage2D(gl.TEXTURE_2D, 0,
-			0, 0, int32(pixels.Bounds().Size().X), int32(pixels.Bounds().Size().Y),
-			gl.RGBA, gl.UNSIGNED_BYTE,
-			gl.Ptr(pixels.Pix))
-	}
-
-	// undo fake pause image
-	if scr.img.lazy.TV.ReqFPS < 3.0 {
-		copy(pixels.Pix, pixelsCp)
-	}
-}
-
-func (scr *screen) pause(set bool) {
-	// when emulation is paused, process the current pixel data to
-	// differentiate "old" pixels (from previous frame) and "new" pixels (drawn
-	// this frame)
-	if set {
-		// do not fade image if we're still on the first scanline after a new
-		// frame. this is to prevent the display being faded after a STEP
-		// FRAME. the user wouldn't expect the image to be faded after asking
-		// to step forward one frame
-		if scr.crit.lastY > 0 {
-			// pixel offset for last x/y coordinates. we're going to assume that
-			// the scr.pixels and scr.altPixels array are constructed exactyle the
-			// same (reasonable assumption)
-			o := scr.crit.pixels.PixOffset(scr.crit.lastX, scr.crit.lastY)
-			if o >= 0 && o < len(scr.crit.pixels.Pix) {
-
-				// make sure all pixels from current frame have full alpha value
-				for i := 0; i <= o; i += 4 {
-					scr.crit.pixels.Pix[i+3] = 255
-					scr.crit.altPixels.Pix[i+3] = 255
-				}
-
-				// make sure old pixels are faded
-				for i := o + 4; i < len(scr.crit.pixels.Pix); i += 4 {
-					scr.crit.pixels.Pix[i+3] = 100
-					scr.crit.altPixels.Pix[i+3] = 100
-				}
-			}
-
-			// similar process for masked pixels. some care is required when
-			// finding the starting offset for array traversal
-
-			x := scr.crit.lastX - television.HorizClksHBlank
-			if x < 0 {
-				x = 0
-			}
-
-			y := scr.crit.lastY - scr.crit.topScanline
-			if y < 0 {
-				// the y pixel is outside (and above) the masked display so
-				// logically the x pixel must be as well
-				y = 0
-				x = 0
-			}
-
-			o = scr.crit.croppedPixels.PixOffset(x, y)
-			if o >= 0 && o < len(scr.crit.croppedPixels.Pix) {
-				for i := 0; i <= o; i += 4 {
-					scr.crit.croppedPixels.Pix[i+3] = 255
-					scr.crit.croppedAltPixels.Pix[i+3] = 255
-				}
-
-				for i := o + 4; i < len(scr.crit.croppedPixels.Pix); i += 4 {
-					scr.crit.croppedPixels.Pix[i+3] = 100
-					scr.crit.croppedAltPixels.Pix[i+3] = 100
-				}
-			}
-		}
-
-		// draw cursor
-		cx := scr.crit.lastX - television.HorizClksHBlank
-		cy := scr.crit.lastY - scr.crit.topScanline
-
-		// make sure we can see the cursor if it's offscreen - we'll draw it in
-		// a different color to indicate that it's only an indicator of where
-		// the cursor is
-		cursorRGB := scr.cursorRGB
-		if cx < 0 {
-			cx = -1
-			cursorRGB = scr.offScreenCursorRGB
-		}
-		if scr.crit.lastY <= scr.crit.topScanline-1 {
-			cy = 0
-			cursorRGB = scr.offScreenCursorRGB
-		} else if scr.crit.lastY >= scr.crit.topScanline+scr.crit.scanlines {
-			cy = scr.crit.scanlines - 1
-			cursorRGB = scr.offScreenCursorRGB
-		}
-
-		// draw cursor over cropped pixels
-		scr.crit.croppedPixels.SetRGBA(cx+1, cy, cursorRGB)
-		scr.crit.croppedAltPixels.SetRGBA(cx+1, cy, cursorRGB)
-
-		// draw cursor over non-cropped pixels. we'll use the cropped pixel
-		// color for this
-		scr.crit.pixels.SetRGBA(scr.crit.lastX+1, scr.crit.lastY, cursorRGB)
-		scr.crit.altPixels.SetRGBA(scr.crit.lastX+1, scr.crit.lastY, cursorRGB)
-	}
-}
-
-func (scr *screen) setCropping(set bool) {
-	scr.cropped = set
-	scr.createTextures = true
 }
 
 // Resize implements the television.PixelRenderer interface
 //
-// MUST NOT be called from the #mainthread
-func (scr *screen) Resize(topScanline int, visibleScanlines int) error {
+// MUST NOT be called from the #mainthread.
+func (scr *screen) Resize(spec specification.Spec, topScanline int, visibleScanlines int) error {
 	scr.img.service <- func() {
-		scr.img.serviceErr <- scr.resize(topScanline, visibleScanlines)
+		scr.resize(spec, topScanline, visibleScanlines)
+		scr.img.serviceErr <- nil
 	}
 	return <-scr.img.serviceErr
 }
 
 // NewFrame implements the television.PixelRenderer interface
 //
-// MUST NOT be called from the #mainthread
-func (scr *screen) NewFrame(frameNum int) error {
+// MUST NOT be called from the #mainthread.
+func (scr *screen) NewFrame(isStable bool) error {
+	scr.crit.section.Lock()
+	defer scr.crit.section.Unlock()
+
+	scr.crit.isStable = isStable
+	scr.crit.backingPixelsUpdate = true
+
 	return nil
 }
 
-// NewScanline implements the television.PixelRenderer interface
+// NewScanline implements the television.PixelRenderer interface.
 func (scr *screen) NewScanline(scanline int) error {
 	return nil
 }
 
-// SetPixel implements the television.PixelRenderer interface
-func (scr *screen) SetPixel(x int, y int, red byte, green byte, blue byte, vblank bool) error {
-	test.AssertNonMainThread()
+// UpdatingPixels implements the television PixelRenderer and PixelRefresh interfaces.
+func (scr *screen) UpdatingPixels(updating bool) {
+	if updating {
+		scr.crit.section.Lock()
+	} else {
+		scr.crit.backingPixelsUpdate = true
+		scr.crit.section.Unlock()
+	}
+}
 
-	scr.crit.section.Lock()
-	defer scr.crit.section.Unlock()
+// SetPixel implements the television.PixelRenderer interface.
+//
+// Must only be called between calls to UpdatingPixels(true) and UpdatingPixels(false).
+func (scr *screen) SetPixel(sig signal.SignalAttributes, current bool) error {
+	col := color.RGBA{R: 0, G: 0, B: 0, A: 255}
 
 	// handle VBLANK by setting pixels to black
-	if vblank {
-		red = 0
-		green = 0
-		blue = 0
+	if !sig.VBlank {
+		col = scr.crit.spec.GetColor(sig.Pixel)
 	}
 
-	scr.crit.lastX = x
-	scr.crit.lastY = y
-
-	rgb := color.RGBA{uint8(red), uint8(green), uint8(blue), uint8(255)}
-	cx := scr.crit.lastX - television.HorizClksHBlank
-	cy := scr.crit.lastY - scr.crit.topScanline
-	scr.crit.croppedPixels.SetRGBA(cx, cy, rgb)
-
-	if x == television.HorizClksHBlank-1 ||
-		y == scr.crit.topScanline-1 ||
-		y == scr.crit.topScanline+scr.crit.scanlines+1 {
-		rgb.B = 50
-		rgb.A = 255
-	} else if y == scr.img.tv.GetSpec().ScanlineTop-1 ||
-		y == scr.img.tv.GetSpec().ScanlineBottom+1 {
-		rgb.R = 50
-		rgb.A = 255
+	if current {
+		scr.crit.lastX = sig.HorizPos
+		scr.crit.lastY = sig.Scanline
 	}
 
-	scr.crit.pixels.SetRGBA(scr.crit.lastX, scr.crit.lastY, rgb)
+	scr.crit.backingPixels.SetRGBA(sig.HorizPos, sig.Scanline, col)
 
 	return nil
 }
 
-// SetAltPixel implements the television.PixelRenderer interface
-func (scr *screen) SetAltPixel(x int, y int, red byte, green byte, blue byte, vblank bool) error {
+// Reset implements the television.PixelRenderer interface.
+func (scr *screen) Reset() {
 	scr.crit.section.Lock()
 	defer scr.crit.section.Unlock()
 
-	rgb := color.RGBA{uint8(red), uint8(green), uint8(blue), uint8(255)}
-	scr.crit.croppedAltPixels.SetRGBA(x-television.HorizClksHBlank, y-scr.crit.topScanline, rgb)
-	scr.crit.altPixels.SetRGBA(x, y, rgb)
+	// simplest method of resetting all pixels to black
+	for i := 0; i < len(scr.crit.backingPixels.Pix)-3; i += 4 {
+		scr.crit.backingPixels.Pix[i] = 0
+		scr.crit.backingPixels.Pix[i+1] = 0
+		scr.crit.backingPixels.Pix[i+2] = 0
+		scr.crit.backingPixels.Pix[i+3] = 255
+	}
+	scr.crit.backingPixelsUpdate = true
+}
+
+// EndRendering implements the television.PixelRenderer interface.
+func (scr *screen) EndRendering() error {
+	return nil
+}
+
+// Reflect implements reflection.Renderer interface.
+//
+// Must only be called between calls to UpdatingPixels(true) and UpdatingPixels(false).
+func (scr *screen) Reflect(ref reflection.Reflection) error {
+	x := ref.TV.HorizPos
+	y := ref.TV.Scanline
+
+	// store Reflection instance
+	if x < len(scr.crit.reflection) && y < len(scr.crit.reflection[x]) {
+		scr.crit.reflection[x][y] = ref
+	}
+
+	// set element pixel
+	rgb := reflection.PaletteElements[ref.VideoElement]
+	scr.crit.elementPixels.SetRGBA(x, y, rgb)
+
+	// write to overlay
+	scr.plotOverlay(x, y, ref)
 
 	return nil
 }
 
-// EndRendering implements the television.PixelRenderer interface
-func (scr *screen) EndRendering() error {
-	return nil
+// replotOverlay should be called from within a scr.crit.section Lock().
+func (scr *screen) replotOverlay() {
+	for y := 0; y < scr.crit.overlayPixels.Bounds().Size().Y; y++ {
+		for x := 0; x < scr.crit.overlayPixels.Bounds().Size().X; x++ {
+			scr.plotOverlay(x, y, scr.crit.reflection[x][y])
+		}
+	}
+}
+
+// plotOverlay should be called from within a scr.crit.section Lock().
+func (scr *screen) plotOverlay(x, y int, ref reflection.Reflection) {
+	scr.crit.overlayPixels.SetRGBA(x, y, color.RGBA{0, 0, 0, 0})
+	switch scr.crit.overlay {
+	case "WSYNC":
+		if ref.WSYNC {
+			scr.crit.overlayPixels.SetRGBA(x, y, reflection.PaletteEvents["WSYNC"])
+		}
+	case "Collisions":
+		if ref.Collision != "" {
+			scr.crit.overlayPixels.SetRGBA(x, y, reflection.PaletteEvents["Collisions"])
+		}
+	case "HMOVE":
+		// HmoveCt counts to -1 (or 255 for a uint8)
+		if ref.Hmove.Delay {
+			scr.crit.overlayPixels.SetRGBA(x, y, reflection.PaletteEvents["HMOVE delay"])
+		} else if ref.Hmove.Latch {
+			if ref.Hmove.RippleCt != 255 {
+				scr.crit.overlayPixels.SetRGBA(x, y, reflection.PaletteEvents["HMOVE"])
+			} else {
+				scr.crit.overlayPixels.SetRGBA(x, y, reflection.PaletteEvents["HMOVE latched"])
+			}
+		}
+	case "Unchanged":
+		if ref.Unchanged {
+			scr.crit.overlayPixels.SetRGBA(x, y, reflection.PaletteEvents["Unchanged"])
+		}
+	}
+}
+
+// texture renderers can share the underlying pixels in the screen instance.
+func (scr *screen) addTextureRenderer(r textureRenderers) {
+	scr.renderers = append(scr.renderers, r)
+	r.resize()
+}
+
+func (scr *screen) render() {
+	// not rendering if gui.state is Rewinding or GotoCoords. render will be
+	// called automatically when state changes from either of these two states
+	// to something else
+	if scr.img.state == gui.StateRewinding || scr.img.state == gui.StateGotoCoords {
+		return
+	}
+
+	// critical section
+	scr.crit.section.Lock()
+	if scr.crit.backingPixelsUpdate {
+		copy(scr.crit.pixels.Pix, scr.crit.backingPixels.Pix)
+		scr.crit.backingPixelsUpdate = false
+	}
+	scr.crit.section.Unlock()
+	// end of critical section
+
+	for _, r := range scr.renderers {
+		r.render()
+	}
 }

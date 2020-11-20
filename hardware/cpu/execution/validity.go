@@ -12,69 +12,59 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package execution
 
 import (
-	"fmt"
-
-	"github.com/jetsetilly/gopher2600/errors"
+	"github.com/jetsetilly/gopher2600/curated"
 )
 
 // IsValid checks whether the instance of Result contains information
 // consistent with the instruction definition.
-func (result Result) IsValid() error {
-	if !result.Final {
-		return errors.New(errors.InvalidResult, "execution not finalised (bad opcode?)")
+func (r Result) IsValid() error {
+	if !r.Final {
+		return curated.Errorf("cpu: execution not finalised (bad opcode?)")
 	}
 
 	// is PageFault valid given content of Defn
-	if !result.Defn.PageSensitive && result.PageFault {
-		return errors.New(errors.InvalidResult, "unexpected page fault")
+	if !r.Defn.PageSensitive && r.PageFault {
+		return curated.Errorf("cpu: unexpected page fault")
 	}
 
 	// byte count
-	if result.ByteCount != result.Defn.Bytes {
-		return errors.New(errors.InvalidResult, fmt.Sprintf("unexpected number of bytes read during decode (%d instead of %d)",
-			result.ByteCount, result.Defn.Bytes))
+	if r.ByteCount != r.Defn.Bytes {
+		return curated.Errorf("cpu: unexpected number of bytes read during decode (%d instead of %d)", r.ByteCount, r.Defn.Bytes)
 	}
 
 	// if a bug has been triggered, don't perform the number of cycles check
-	if result.CPUBug == "" {
-		if result.Defn.IsBranch() {
-			if result.ActualCycles != result.Defn.Cycles && result.ActualCycles != result.Defn.Cycles+1 && result.ActualCycles != result.Defn.Cycles+2 {
-				msg := fmt.Sprintf("number of cycles wrong for opcode %#02x [%s] (%d instead of %d, %d or %d)",
-					result.Defn.OpCode,
-					result.Defn.Mnemonic,
-					result.ActualCycles,
-					result.Defn.Cycles,
-					result.Defn.Cycles+1,
-					result.Defn.Cycles+2)
-				return errors.New(errors.InvalidResult, msg)
+	if r.CPUBug == "" {
+		if r.Defn.IsBranch() {
+			if r.Cycles != r.Defn.Cycles && r.Cycles != r.Defn.Cycles+1 && r.Cycles != r.Defn.Cycles+2 {
+				return curated.Errorf("cpu: number of cycles wrong for opcode %#02x [%s] (%d instead of %d, %d or %d)",
+					r.Defn.OpCode,
+					r.Defn.Mnemonic,
+					r.Cycles,
+					r.Defn.Cycles,
+					r.Defn.Cycles+1,
+					r.Defn.Cycles+2)
 			}
 		} else {
-			if result.Defn.PageSensitive {
-				if result.PageFault && result.ActualCycles != result.Defn.Cycles && result.ActualCycles != result.Defn.Cycles+1 {
-					msg := fmt.Sprintf("number of cycles wrong for opcode %#02x [%s] (%d instead of %d, %d)",
-						result.Defn.OpCode,
-						result.Defn.Mnemonic,
-						result.ActualCycles,
-						result.Defn.Cycles,
-						result.Defn.Cycles+1)
-					return errors.New(errors.InvalidResult, msg)
+			if r.Defn.PageSensitive {
+				if r.PageFault && r.Cycles != r.Defn.Cycles && r.Cycles != r.Defn.Cycles+1 {
+					return curated.Errorf("cpu: number of cycles wrong for opcode %#02x [%s] (%d instead of %d, %d)",
+						r.Defn.OpCode,
+						r.Defn.Mnemonic,
+						r.Cycles,
+						r.Defn.Cycles,
+						r.Defn.Cycles+1)
 				}
 			} else {
-				if result.ActualCycles != result.Defn.Cycles {
-					msg := fmt.Sprintf("number of cycles wrong for opcode %#02x [%s] (%d instead of %d)",
-						result.Defn.OpCode,
-						result.Defn.Mnemonic,
-						result.ActualCycles,
-						result.Defn.Cycles)
-					return errors.New(errors.InvalidResult, msg)
+				if r.Cycles != r.Defn.Cycles {
+					return curated.Errorf("cpu: number of cycles wrong for opcode %#02x [%s] (%d instead of %d)",
+						r.Defn.OpCode,
+						r.Defn.Mnemonic,
+						r.Cycles,
+						r.Defn.Cycles)
 				}
 			}
 		}

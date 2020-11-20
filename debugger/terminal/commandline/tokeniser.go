@@ -12,10 +12,6 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package commandline
 
@@ -24,19 +20,19 @@ import (
 )
 
 // Tokens represents tokenised input. This can be used to walk through the
-// input string (using get()) for eas(ier) parsing
+// input string (using get()) for eas(ier) parsing.
 type Tokens struct {
 	input  string
 	tokens []string
 	curr   int
 }
 
-// String representation of tokens
+// String representation of tokens.
 func (tk *Tokens) String() string {
 	return strings.Join(tk.tokens, " ")
 }
 
-// Reset begins the token traversal process from the beginning
+// Reset begins the token traversal process from the beginning.
 func (tk *Tokens) Reset() {
 	tk.curr = 0
 }
@@ -47,9 +43,14 @@ func (tk *Tokens) End() {
 	tk.curr = len(tk.tokens)
 }
 
-// IsEnd returns true if we're at the end of the token list
+// IsEnd returns true if we're at the end of the token list.
 func (tk Tokens) IsEnd() bool {
 	return tk.curr >= len(tk.tokens)
+}
+
+// Len returns the number of tokens.
+func (tk Tokens) Len() int {
+	return len(tk.tokens)
 }
 
 // Remainder returns the remaining tokens as a string.
@@ -57,12 +58,12 @@ func (tk Tokens) Remainder() string {
 	return strings.Join(tk.tokens[tk.curr:], " ")
 }
 
-// Remaining returns the count of reminaing tokens in the token list
+// Remaining returns the count of reminaing tokens in the token list.
 func (tk Tokens) Remaining() int {
 	return len(tk.tokens) - tk.curr
 }
 
-// ReplaceEnd changes the last entry of the token list
+// ReplaceEnd changes the last entry of the token list.
 func (tk *Tokens) ReplaceEnd(newEnd string) {
 	// change end of original string
 	t := strings.LastIndex(tk.input, tk.tokens[len(tk.tokens)-1])
@@ -109,7 +110,7 @@ func (tk Tokens) Peek() (string, bool) {
 	return tk.tokens[tk.curr], true
 }
 
-// TokeniseInput creates and returns a new Tokens instance
+// TokeniseInput creates and returns a new Tokens instance.
 func TokeniseInput(input string) *Tokens {
 	tk := &Tokens{}
 
@@ -128,7 +129,44 @@ func TokeniseInput(input string) *Tokens {
 // tokeniseInput is the "raw" tokenising function (without normalisation or
 // wrapping everything up in a Tokens instance). used by the fancier
 // TokeniseInput and anywhere else where we need to divide input into tokens
-// (eg. TabCompletion.Complete())
+// (eg. TabCompletion.Complete()).
 func tokeniseInput(input string) []string {
-	return strings.Fields(input)
+	quoted := false
+	tokens := make([]string, 0)
+
+	markStart := 0
+	markEnd := 0
+
+	i := 0
+	for i = 0; i < len(input); i++ {
+		switch input[i] {
+		case ' ':
+			if !quoted {
+				if markEnd >= markStart {
+					tokens = append(tokens, input[markStart:markEnd+1])
+				}
+				markStart = i + 1
+			} else {
+				markEnd = i
+			}
+		case '"':
+			if quoted {
+				if markEnd > markStart {
+					tokens = append(tokens, input[markStart:markEnd+1])
+				}
+				markEnd = i
+			}
+			markStart = i + 1
+			quoted = !quoted
+		default:
+			markEnd = i
+		}
+	}
+	markEnd = i
+
+	if markEnd > markStart {
+		tokens = append(tokens, input[markStart:markEnd])
+	}
+
+	return tokens
 }

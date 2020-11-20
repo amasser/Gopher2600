@@ -12,10 +12,6 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package commandline_test
 
@@ -265,6 +261,49 @@ func TestTabCompletion_nestedGroups(t *testing.T) {
 
 	completion = "TEST bA"
 	expected = "TEST BAR "
+	completion = tc.Complete(completion)
+	if completion != expected {
+		t.Errorf("expecting '%s' got '%s'", expected, completion)
+	}
+
+	cmds, err = commandline.ParseCommandTemplate([]string{
+		"PREF ([SET|NO|TOGGLE] [RANDSTART|RANDPINS])",
+	})
+	if err != nil {
+		t.Errorf("does not parse: %s", err)
+	}
+
+	tc = commandline.NewTabCompletion(cmds)
+	completion = "P"
+	expected = "PREF "
+	completion = tc.Complete(completion)
+	if completion != expected {
+		t.Errorf("expecting '%s' got '%s'", expected, completion)
+	}
+
+	completion = "PREF S"
+	expected = "PREF SET "
+	completion = tc.Complete(completion)
+	if completion != expected {
+		t.Errorf("expecting '%s' got '%s'", expected, completion)
+	}
+
+	completion = "PREF Tog"
+	expected = "PREF TOGGLE "
+	completion = tc.Complete(completion)
+	if completion != expected {
+		t.Errorf("expecting '%s' got '%s'", expected, completion)
+	}
+
+	completion = "PREF SET R"
+	expected = "PREF SET RANDSTART "
+	completion = tc.Complete(completion)
+	if completion != expected {
+		t.Errorf("expecting '%s' got '%s'", expected, completion)
+	}
+
+	// tab again without changing input
+	expected = "PREF SET RANDPINS "
 	completion = tc.Complete(completion)
 	if completion != expected {
 		t.Errorf("expecting '%s' got '%s'", expected, completion)

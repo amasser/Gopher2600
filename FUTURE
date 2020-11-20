@@ -22,6 +22,12 @@ more accurate
 	}
 
 
+hiscore server support
+----------------------
+
+to complete
+
+
 debugger
 --------
 
@@ -44,8 +50,17 @@ o LAST to include additional information
 
 o CPU command to change status register
 
+o test harness to handle more sophisticated operatio of the debugger. for
+	example, making sure breakpoints are triggered and retriggered correctly.
+
+o better breakpoint/trap target parsing
+	- AddressingMode and EffectCategory should be referred to (and be
+	  displayed) as a descriptive string, rather than numerically
+
 vcs
 ---
+
+o DPC+ and CDFJ cartridge formats
 
 o randomised initialisation
 	- optional to prevent regression tests from failing

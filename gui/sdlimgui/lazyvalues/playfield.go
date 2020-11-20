@@ -12,10 +12,6 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package lazyvalues
 
@@ -27,20 +23,27 @@ import (
 
 // LazyPlayfield lazily accesses playfield information from the emulator.
 type LazyPlayfield struct {
-	val *Values
+	val *LazyValues
 
-	atomicCtrlpf          atomic.Value // uint8
-	atomicForegroundColor atomic.Value // uint8
-	atomicBackgroundColor atomic.Value // uint8
-	atomicReflected       atomic.Value // bool
-	atomicScoremode       atomic.Value // bool
-	atomicPriority        atomic.Value // bool
-	atomicRegion          atomic.Value // video.ScreenRegion
-	atomicPF0             atomic.Value // uint8
-	atomicPF1             atomic.Value // uint8
-	atomicPF2             atomic.Value // uint8
-	atomicIdx             atomic.Value // int
-	atomicData            atomic.Value // []uint8
+	pf              atomic.Value // *video.Playfield
+	ctrlpf          atomic.Value // uint8
+	foregroundColor atomic.Value // uint8
+	backgroundColor atomic.Value // uint8
+	reflected       atomic.Value // bool
+	scoremode       atomic.Value // bool
+	priority        atomic.Value // bool
+	region          atomic.Value // video.ScreenRegion
+	pf0             atomic.Value // uint8
+	pf1             atomic.Value // uint8
+	pF2             atomic.Value // uint8
+	idx             atomic.Value // int
+	leftData        atomic.Value // []bool
+	rightData       atomic.Value // []bool
+
+	// Pf is a pointer to the "live" data in the other thread. Do not access
+	// the fields in this struct directly. It can be used in PushRawEvent()
+	// call
+	Pf *video.Playfield
 
 	Ctrlpf          uint8
 	ForegroundColor uint8
@@ -53,38 +56,49 @@ type LazyPlayfield struct {
 	PF1             uint8
 	PF2             uint8
 	Idx             int
-	Data            [20]bool
+	LeftData        []bool
+	RightData       []bool
 }
 
-func newLazyPlayfield(val *Values) *LazyPlayfield {
+func newLazyPlayfield(val *LazyValues) *LazyPlayfield {
 	return &LazyPlayfield{val: val}
 }
 
+func (lz *LazyPlayfield) push() {
+	lz.pf.Store(lz.val.Dbg.VCS.TIA.Video.Playfield)
+	lz.ctrlpf.Store(lz.val.Dbg.VCS.TIA.Video.Playfield.Ctrlpf)
+	lz.foregroundColor.Store(lz.val.Dbg.VCS.TIA.Video.Playfield.ForegroundColor)
+	lz.backgroundColor.Store(lz.val.Dbg.VCS.TIA.Video.Playfield.BackgroundColor)
+	lz.reflected.Store(lz.val.Dbg.VCS.TIA.Video.Playfield.Reflected)
+	lz.scoremode.Store(lz.val.Dbg.VCS.TIA.Video.Playfield.Scoremode)
+	lz.priority.Store(lz.val.Dbg.VCS.TIA.Video.Playfield.Priority)
+	lz.region.Store(lz.val.Dbg.VCS.TIA.Video.Playfield.Region)
+	lz.pf0.Store(lz.val.Dbg.VCS.TIA.Video.Playfield.PF0)
+	lz.pf1.Store(lz.val.Dbg.VCS.TIA.Video.Playfield.PF1)
+	lz.pF2.Store(lz.val.Dbg.VCS.TIA.Video.Playfield.PF2)
+	lz.idx.Store(lz.val.Dbg.VCS.TIA.Video.Playfield.Idx)
+
+	l := make([]bool, video.RegionWidth)
+	r := make([]bool, video.RegionWidth)
+	copy(l, *lz.val.Dbg.VCS.TIA.Video.Playfield.LeftData)
+	copy(r, *lz.val.Dbg.VCS.TIA.Video.Playfield.RightData)
+	lz.leftData.Store(l)
+	lz.rightData.Store(r)
+}
+
 func (lz *LazyPlayfield) update() {
-	lz.val.Dbg.PushRawEvent(func() {
-		lz.atomicCtrlpf.Store(lz.val.VCS.TIA.Video.Playfield.Ctrlpf)
-		lz.atomicForegroundColor.Store(lz.val.VCS.TIA.Video.Playfield.ForegroundColor)
-		lz.atomicBackgroundColor.Store(lz.val.VCS.TIA.Video.Playfield.BackgroundColor)
-		lz.atomicReflected.Store(lz.val.VCS.TIA.Video.Playfield.Reflected)
-		lz.atomicScoremode.Store(lz.val.VCS.TIA.Video.Playfield.Scoremode)
-		lz.atomicPriority.Store(lz.val.VCS.TIA.Video.Playfield.Priority)
-		lz.atomicRegion.Store(lz.val.VCS.TIA.Video.Playfield.Region)
-		lz.atomicPF0.Store(lz.val.VCS.TIA.Video.Playfield.PF0)
-		lz.atomicPF1.Store(lz.val.VCS.TIA.Video.Playfield.PF1)
-		lz.atomicPF2.Store(lz.val.VCS.TIA.Video.Playfield.PF2)
-		lz.atomicIdx.Store(lz.val.VCS.TIA.Video.Playfield.Idx)
-		lz.atomicData.Store(lz.val.VCS.TIA.Video.Playfield.Data)
-	})
-	lz.Ctrlpf, _ = lz.atomicCtrlpf.Load().(uint8)
-	lz.ForegroundColor, _ = lz.atomicForegroundColor.Load().(uint8)
-	lz.BackgroundColor, _ = lz.atomicBackgroundColor.Load().(uint8)
-	lz.Reflected, _ = lz.atomicReflected.Load().(bool)
-	lz.Scoremode, _ = lz.atomicScoremode.Load().(bool)
-	lz.Priority, _ = lz.atomicPriority.Load().(bool)
-	lz.Region, _ = lz.atomicRegion.Load().(video.ScreenRegion)
-	lz.PF0, _ = lz.atomicPF0.Load().(uint8)
-	lz.PF1, _ = lz.atomicPF1.Load().(uint8)
-	lz.PF2, _ = lz.atomicPF2.Load().(uint8)
-	lz.Idx, _ = lz.atomicIdx.Load().(int)
-	lz.Data, _ = lz.atomicData.Load().([20]bool)
+	lz.Pf, _ = lz.pf.Load().(*video.Playfield)
+	lz.Ctrlpf, _ = lz.ctrlpf.Load().(uint8)
+	lz.ForegroundColor, _ = lz.foregroundColor.Load().(uint8)
+	lz.BackgroundColor, _ = lz.backgroundColor.Load().(uint8)
+	lz.Reflected, _ = lz.reflected.Load().(bool)
+	lz.Scoremode, _ = lz.scoremode.Load().(bool)
+	lz.Priority, _ = lz.priority.Load().(bool)
+	lz.Region, _ = lz.region.Load().(video.ScreenRegion)
+	lz.PF0, _ = lz.pf0.Load().(uint8)
+	lz.PF1, _ = lz.pf1.Load().(uint8)
+	lz.PF2, _ = lz.pF2.Load().(uint8)
+	lz.Idx, _ = lz.idx.Load().(int)
+	lz.LeftData, _ = lz.leftData.Load().([]bool)
+	lz.RightData, _ = lz.rightData.Load().([]bool)
 }

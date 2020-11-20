@@ -12,10 +12,6 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package regression
 
@@ -24,12 +20,11 @@ import (
 	"time"
 
 	"github.com/jetsetilly/gopher2600/cartridgeloader"
-	"github.com/jetsetilly/gopher2600/errors"
 	"github.com/jetsetilly/gopher2600/paths"
 )
 
 // create a unique filename from a CatridgeLoader instance. used when saving
-// scripts into regressionScripts directory
+// scripts into regressionScripts directory.
 func uniqueFilename(prepend string, cartload cartridgeloader.Loader) (string, error) {
 	n := time.Now()
 	timestamp := fmt.Sprintf("%04d%02d%02d_%02d%02d%02d", n.Year(), n.Month(), n.Day(), n.Hour(), n.Minute(), n.Second())
@@ -37,7 +32,7 @@ func uniqueFilename(prepend string, cartload cartridgeloader.Loader) (string, er
 
 	scrPth, err := paths.ResourcePath(regressionScripts, newScript)
 	if err != nil {
-		return "", errors.New(errors.RegressionError, err)
+		return "", err
 	}
 
 	return scrPth, nil

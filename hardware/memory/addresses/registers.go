@@ -12,10 +12,6 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package addresses
 
@@ -26,12 +22,12 @@ type ChipRegister int
 
 // TIA registers
 //
-// These value are used by the emulator to specifiy known addresses. For
+// These value are used by the emulator to specify known addresses. For
 // example, when writing collision information we know we need the CXM0P
 // register. these named values make the code more readable
 //
 // Values are enumerated from 0; value is added to the origin address of the
-// TIA in ChipBus.ChipWrite implementation
+// TIA in ChipBus.ChipWrite implementation.
 const (
 	CXM0P ChipRegister = iota
 	CXM1P
@@ -51,12 +47,12 @@ const (
 
 // RIOT registers
 //
-// These value are used by the emulator to specifiy known addresses. For
+// These value are used by the emulator to specify known addresses. For
 // example, the timer updates itself every cycle and stores time remaining
 // value in the INTIM register.
 //
 // Values are enumerated from 0; value is added to the origin address of the
-// TIA in ChipBus.ChipWrite implementation
+// TIA in ChipBus.ChipWrite implementation.
 const (
 	SWCHA ChipRegister = iota
 	SWACNT

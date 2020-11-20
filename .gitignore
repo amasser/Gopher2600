@@ -6,9 +6,12 @@ test_roms/*
 roms
 .gopher2600/*
 gopher2600
+gopher2600.exe
 *.dot
 *.ps
+*.pdf
 recording_*
+terminal_*
 *cpu.profile
 *mem.profile
 out
@@ -16,3 +19,4 @@ out2
 *.bin
 *.wasm
 README.html
+MISSING_LICENCE

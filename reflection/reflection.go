@@ -12,37 +12,58 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package reflection
 
-// ReflectPixel contains additional debugging information from the last video cycle.
-// it is up to the Renderer to match this up with the last television signal
-type ReflectPixel struct {
-	Label string
-
-	// Renderer implementations are free to use the color information
-	// as they wish (adding alpha information seems a probable scenario).
-	Red, Green, Blue, Alpha byte
-
-	// whether the attribute is one that is "instant" or resolves after a
-	// short scheduled delay
-	Scheduled bool
-}
+import (
+	"github.com/jetsetilly/gopher2600/hardware/cpu/execution"
+	"github.com/jetsetilly/gopher2600/hardware/memory/cartridge/mapper"
+	"github.com/jetsetilly/gopher2600/hardware/television/signal"
+	"github.com/jetsetilly/gopher2600/hardware/tia/video"
+)
 
 // Renderer implementations accepts ReflectPixel values and associates it in
-// some way with the moste recent television signal
+// some way with the most recent television signal.
 type Renderer interface {
-	SetReflectPixel(ReflectPixel) error
+	Reflect(Reflection) error
 }
 
-// StubRenderer is a minimal implementation of reflection.StubRenderer
-type StubRenderer struct{}
-
-// SetReflectPixel implements the relfection.Renderer interface
-func (mpx *StubRenderer) SetReflectPixel(_ ReflectPixel) error {
-	return nil
+// IdentifyReflector implementations can identify a reflection.Renderer.
+type IdentifyReflector interface {
+	GetReflectionRenderer() Renderer
 }
+
+// Reflection packages together the details of the the last video step. It
+// includes the CPU execution result, the bank from which the instruction
+// originates, the video element that produced the last video pixel on screen;
+// among other information.
+//
+// Note that ordering of the structure is important. There's a saving of about
+// 2MB per frame compared to the unoptimal ordering.
+type Reflection struct {
+	CPU          execution.Result
+	Bank         mapper.BankInfo
+	VideoElement video.Element
+	TV           signal.SignalAttributes
+	Hmove        Hmove
+	WSYNC        bool
+	IsRAM        bool
+	Hblank       bool
+	Unchanged    bool
+	Collision    string
+}
+
+// Hmove groups the HMOVE reflection information. It's too complex a property
+// to distil into a single variable.
+//
+// Ordering of the structure is important.
+type Hmove struct {
+	DelayCt  int
+	Delay    bool
+	Latch    bool
+	RippleCt uint8
+}
+
+// OverlayList is the list of overlays that should be supported by a
+// reflection.Renderer.
+var OverlayList = []string{"WSYNC", "Collisions", "HMOVE", "Unchanged"}

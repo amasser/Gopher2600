@@ -12,10 +12,6 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package patch
 
@@ -28,7 +24,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/jetsetilly/gopher2600/errors"
+	"github.com/jetsetilly/gopher2600/curated"
 	"github.com/jetsetilly/gopher2600/hardware/memory/cartridge"
 	"github.com/jetsetilly/gopher2600/paths"
 )
@@ -46,25 +42,28 @@ func CartridgeMemory(mem *cartridge.Cartridge, patchFile string) (bool, error) {
 
 	p, err := paths.ResourcePath(patchPath, patchFile)
 	if err != nil {
-		return false, errors.New(errors.PatchError, err)
+		return false, curated.Errorf("patch: %v", err)
 	}
 
 	f, err := os.Open(p)
 	if err != nil {
 		switch err.(type) {
 		case *os.PathError:
-			return false, errors.New(errors.PatchError, fmt.Sprintf("patch file not found (%s)", p))
+			return false, curated.Errorf("patch: %v", fmt.Sprintf("patch file not found (%s)", p))
 		}
-		return false, errors.New(errors.PatchError, err)
+		return false, curated.Errorf("patch: %v", err)
 	}
 	defer f.Close()
 
 	// make sure we're at the beginning of the file
 	if _, err = f.Seek(0, io.SeekStart); err != nil {
-		return false, err
+		return false, curated.Errorf("patch: %v", err)
 	}
 
 	buffer, err := ioutil.ReadAll(f)
+	if err != nil {
+		return false, curated.Errorf("patch: %v", err)
+	}
 
 	// once a patch has been made then we'll flip patched to true and return it
 	// to the calling function
@@ -73,7 +72,6 @@ func CartridgeMemory(mem *cartridge.Cartridge, patchFile string) (bool, error) {
 	// walk through lines
 	lines := strings.Split(string(buffer), "\n")
 	for i := 0; i < len(lines); i++ {
-
 		// ignore empty lines
 		if len(lines[i]) == 0 {
 			continue // for loop
@@ -86,7 +84,7 @@ func CartridgeMemory(mem *cartridge.Cartridge, patchFile string) (bool, error) {
 
 		pokeLine := strings.Split(lines[i], pokeLineSeparator)
 
-		// ignore any lines that don't match the required [address: values...] format
+		// ignore any lines that don't match the required [offset: values...] format
 		if len(pokeLine) != 2 {
 			continue // for loop
 		}
@@ -95,8 +93,8 @@ func CartridgeMemory(mem *cartridge.Cartridge, patchFile string) (bool, error) {
 		pokeLine[0] = strings.TrimSpace(pokeLine[0])
 		pokeLine[1] = strings.TrimSpace(pokeLine[1])
 
-		// parse address
-		address, err := strconv.ParseInt(pokeLine[0], 16, 16)
+		// parse offset
+		offset, err := strconv.ParseInt(pokeLine[0], 16, 16)
 		if err != nil {
 			continue // for loop
 		}
@@ -104,7 +102,6 @@ func CartridgeMemory(mem *cartridge.Cartridge, patchFile string) (bool, error) {
 		// split values into parts
 		values := strings.Split(pokeLine[1], " ")
 		for j := 0; j < len(values); j++ {
-
 			// trim space around each value
 			values[j] = strings.TrimSpace(values[j])
 
@@ -120,14 +117,14 @@ func CartridgeMemory(mem *cartridge.Cartridge, patchFile string) (bool, error) {
 			}
 
 			// patch memory
-			err = mem.Patch(uint16(address), uint8(v))
+			err = mem.Patch(int(offset), uint8(v))
 			if err != nil {
-				return patched, errors.New(errors.PatchError, err)
+				return patched, curated.Errorf("patch: %v", err)
 			}
 			patched = true
 
-			// advance address
-			address++
+			// advance offset
+			offset++
 		}
 	}
 

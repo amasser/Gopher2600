@@ -12,10 +12,6 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package recorder
 
@@ -24,16 +20,16 @@ import (
 	"io"
 	"os"
 
+	"github.com/jetsetilly/gopher2600/curated"
 	"github.com/jetsetilly/gopher2600/digest"
-	"github.com/jetsetilly/gopher2600/errors"
 	"github.com/jetsetilly/gopher2600/hardware"
-	"github.com/jetsetilly/gopher2600/hardware/riot/input"
-	"github.com/jetsetilly/gopher2600/television"
+	"github.com/jetsetilly/gopher2600/hardware/riot/ports"
+	"github.com/jetsetilly/gopher2600/hardware/television/signal"
 )
 
-// Recorder transcribes user input to a file. The transcribed file is intended
-// for future playback. The Recorder type implements the
-// riot.input.EventRecorder interface.
+// Recorder transcribes user input to a file. The recorded file is intended
+// for future playback. The Recorder type implements the ports.EventRecorder
+// interface.
 type Recorder struct {
 	vcs    *hardware.VCS
 	output *os.File
@@ -47,25 +43,39 @@ type Recorder struct {
 // NewRecorder is the preferred method of implementation for the FileRecorder
 // type. Note that attaching of the Recorder to all the ports of the VCS
 // (including the panel) is implicit in this function call.
+//
+// Note that this will reset the VCS.
 func NewRecorder(transcript string, vcs *hardware.VCS) (*Recorder, error) {
 	var err error
 
 	// check we're working with correct information
 	if vcs == nil || vcs.TV == nil {
-		return nil, errors.New(errors.RecordingError, "hardware is not suitable for recording")
+		return nil, curated.Errorf("recorder: hardware is not suitable for recording")
 	}
 
-	rec := &Recorder{vcs: vcs}
+	rec := &Recorder{
+		vcs: vcs,
+	}
+
+	// we want the machine in a known state. the easiest way to do this is to
+	// reset the hardware preferences
+	err = vcs.Prefs.Reset()
+	if err != nil {
+		return nil, curated.Errorf("recorder: %v", err)
+	}
+
+	err = rec.vcs.Reset()
+	if err != nil {
+		return nil, curated.Errorf("recorder: %v", err)
+	}
 
 	// attach recorder to vcs peripherals, including the panel
-	vcs.HandController0.AttachEventRecorder(rec)
-	vcs.HandController1.AttachEventRecorder(rec)
-	vcs.Panel.AttachEventRecorder(rec)
+	vcs.RIOT.Ports.AttachEventRecorder(rec)
 
 	// video digester for playback verification
 	rec.digest, err = digest.NewVideo(vcs.TV)
 	if err != nil {
-		return nil, errors.New(errors.RecordingError, err)
+		return nil, curated.Errorf("recorder: %v", err)
 	}
 
 	// open file
@@ -73,10 +83,10 @@ func NewRecorder(transcript string, vcs *hardware.VCS) (*Recorder, error) {
 	if os.IsNotExist(err) {
 		rec.output, err = os.Create(transcript)
 		if err != nil {
-			return nil, errors.New(errors.RecordingError, "can't create file")
+			return nil, curated.Errorf("recorder: can't create file")
 		}
 	} else {
-		return nil, errors.New(errors.RecordingError, "file already exists")
+		return nil, curated.Errorf("recorder: file already exists")
 	}
 
 	// delay writing of header until the first call to transcribe. we're
@@ -91,62 +101,53 @@ func NewRecorder(transcript string, vcs *hardware.VCS) (*Recorder, error) {
 	return rec, nil
 }
 
-// End flushes all remaining transcription to the output file and closes it.
+// End flushes all remaining events to the output file and closes it.
 func (rec *Recorder) End() error {
 	// write the power off event to the transcript
-	err := rec.RecordEvent(input.PanelID, input.PanelPowerOff, nil)
+	err := rec.RecordEvent(ports.PanelID, ports.PanelPowerOff, nil)
 	if err != nil {
-		return errors.New(errors.RecordingError, err)
+		return curated.Errorf("recorder: %v", err)
 	}
 
 	err = rec.output.Close()
 	if err != nil {
-		return errors.New(errors.RecordingError, err)
+		return curated.Errorf("recorder: %v", err)
 	}
 
 	return nil
 }
 
-// RecordEvent implements the input.EventRecorder interface
-func (rec *Recorder) RecordEvent(id input.ID, event input.Event, value input.EventData) error {
+// RecordEvent implements the ports.EventRecorder interface.
+func (rec *Recorder) RecordEvent(id ports.PortID, event ports.Event, value ports.EventData) error {
 	var err error
 
 	// write header if it's not been written already
 	if !rec.headerWritten {
 		err = rec.writeHeader()
 		if err != nil {
-			return errors.New(errors.RecordingError, err)
+			return curated.Errorf("recorder: %v", err)
 		}
 		rec.headerWritten = true
 	}
 
 	// don't do anything if event is the NoEvent
-	if event == input.NoEvent {
+	if event == ports.NoEvent {
 		return nil
 	}
 
 	// sanity checks
 	if rec.output == nil {
-		return errors.New(errors.RecordingError, "recording file is not open")
+		return curated.Errorf("recorder: recording file is not open")
 	}
 
 	if rec.vcs == nil || rec.vcs.TV == nil {
-		return errors.New(errors.RecordingError, "hardware is not suitable for recording")
+		return curated.Errorf("recorder: hardware is not suitable for recording")
 	}
 
 	// create line and write to file
-	frame, err := rec.vcs.TV.GetState(television.ReqFramenum)
-	if err != nil {
-		return err
-	}
-	scanline, err := rec.vcs.TV.GetState(television.ReqScanline)
-	if err != nil {
-		return err
-	}
-	horizpos, err := rec.vcs.TV.GetState(television.ReqHorizPos)
-	if err != nil {
-		return err
-	}
+	frame := rec.vcs.TV.GetState(signal.ReqFramenum)
+	scanline := rec.vcs.TV.GetState(signal.ReqScanline)
+	horizpos := rec.vcs.TV.GetState(signal.ReqHorizPos)
 
 	// convert value of nil type to the empty string
 	if value == nil {
@@ -165,10 +166,10 @@ func (rec *Recorder) RecordEvent(id input.ID, event input.Event, value input.Eve
 
 	n, err := io.WriteString(rec.output, line)
 	if err != nil {
-		return errors.New(errors.RecordingError, err)
+		return curated.Errorf("recorder: %v", err)
 	}
 	if n != len(line) {
-		return errors.New(errors.RecordingError, "output truncated")
+		return curated.Errorf("recorder: output truncated")
 	}
 
 	return nil

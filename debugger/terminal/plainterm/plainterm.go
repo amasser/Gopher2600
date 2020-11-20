@@ -12,10 +12,6 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 // Package plainterm implements the Terminal interface for the gopher2600
 // debugger. It's a simple as simple can be and offers no special features.
@@ -26,8 +22,8 @@ import (
 	"io"
 	"os"
 
+	"github.com/jetsetilly/gopher2600/curated"
 	"github.com/jetsetilly/gopher2600/debugger/terminal"
-	"github.com/jetsetilly/gopher2600/errors"
 )
 
 // PlainTerminal is the default, most basic terminal interface. It keeps the
@@ -39,34 +35,34 @@ type PlainTerminal struct {
 	silenced bool
 }
 
-// Initialise perfoms any setting up required for the terminal
+// Initialise perfoms any setting up required for the terminal.
 func (pt *PlainTerminal) Initialise() error {
 	pt.input = os.Stdin
 	pt.output = os.Stdout
 	return nil
 }
 
-// CleanUp perfoms any cleaning up required for the terminal
+// CleanUp perfoms any cleaning up required for the terminal.
 func (pt *PlainTerminal) CleanUp() {
 }
 
-// RegisterTabCompletion adds an implementation of TabCompletion to the terminal
+// RegisterTabCompletion adds an implementation of TabCompletion to the terminal.
 func (pt *PlainTerminal) RegisterTabCompletion(terminal.TabCompletion) {
 }
 
-// Silence implements the terminal.Terminal interface
+// Silence implements the terminal.Terminal interface.
 func (pt *PlainTerminal) Silence(silenced bool) {
 	pt.silenced = silenced
 }
 
-// TermPrintLine implements the terminal.Output interface
+// TermPrintLine implements the terminal.Output interface.
 func (pt PlainTerminal) TermPrintLine(style terminal.Style, s string) {
 	if pt.silenced && style != terminal.StyleError {
 		return
 	}
 
-	// we don't need to output normalised input for this type of terminal
-	if style == terminal.StyleInput {
+	// we don't need to echo user input for this type of terminal
+	if style == terminal.StyleEcho {
 		return
 	}
 
@@ -76,19 +72,17 @@ func (pt PlainTerminal) TermPrintLine(style terminal.Style, s string) {
 	}
 
 	pt.output.Write([]byte(s))
-
-	if !style.IsPrompt() {
-		pt.output.Write([]byte("\n"))
-	}
+	pt.output.Write([]byte("\n"))
 }
 
-// TermRead implements the terminal.Input interface
+// TermRead implements the terminal.Input interface.
 func (pt PlainTerminal) TermRead(input []byte, prompt terminal.Prompt, events *terminal.ReadEvents) (int, error) {
 	if pt.silenced {
 		return 0, nil
 	}
 
-	pt.TermPrintLine(prompt.Style, prompt.Content)
+	// insert prompt into output stream
+	pt.output.Write([]byte(prompt.String()))
 
 	n, err := pt.input.Read(input)
 	if err != nil {
@@ -100,19 +94,19 @@ func (pt PlainTerminal) TermRead(input []byte, prompt terminal.Prompt, events *t
 	// error to the debugging loop
 	select {
 	case <-events.IntEvents:
-		return 0, errors.New(errors.UserInterrupt)
+		return 0, curated.Errorf(terminal.UserInterrupt)
 	default:
 	}
 
 	return n, nil
 }
 
-// TermReadCheck implements the terminal.Input interface
+// TermReadCheck implements the terminal.Input interface.
 func (pt *PlainTerminal) TermReadCheck() bool {
 	return false
 }
 
-// IsInteractive implements the terminal.Input interface
+// IsInteractive implements the terminal.Input interface.
 func (pt *PlainTerminal) IsInteractive() bool {
 	return true
 }

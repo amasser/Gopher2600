@@ -12,15 +12,24 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package gui
 
 // GUI defines the operations that can be performed on visual user interfaces.
 type GUI interface {
-	// send a request to set a gui feature
-	SetFeature(request FeatureReq, args ...interface{}) error
+	// Send a request to set a GUI feature.
+	SetFeature(request FeatureReq, args ...FeatureReqData) error
+
+	// Same as SetFeature() but not waiting for the result. Useful in time
+	// critical situations when you are absolutely sure there will be no
+	// errors that need handling.
+	SetFeatureNoError(request FeatureReq, args ...FeatureReqData)
+
+	// Return current state of GUI feautre.
+	GetFeature(request FeatureReq) (FeatureReqData, error)
 }
+
+// Sentinal error returned if GUI does no support requested feature.
+const (
+	UnsupportedGuiFeature = "unsupported gui feature: %v"
+)

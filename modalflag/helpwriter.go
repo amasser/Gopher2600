@@ -12,10 +12,6 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package modalflag
 
@@ -25,13 +21,13 @@ import (
 	"strings"
 )
 
-// helpWriter is used to amend the default output from the flag package
+// helpWriter is used to amend the default output from the flag package.
 type helpWriter struct {
 	// the last []byte sent to the Write() function
 	buffer []byte
 }
 
-// Clear contents of output buffer
+// Clear contents of output buffer.
 func (hw *helpWriter) Clear() {
 	hw.buffer = []byte{}
 }
@@ -40,7 +36,7 @@ func (hw *helpWriter) Help(output io.Writer, banner string, subModes []string, a
 	s := string(hw.buffer)
 	helpLines := strings.Split(s, "\n")
 
-	// ouput "no help available" message if there is no flag information and no
+	// output "no help available" message if there is no flag information and no
 	// sub-modes
 	if s == "Usage:\n" && len(subModes) == 0 {
 		output.Write([]byte("No help available"))
@@ -68,7 +64,6 @@ func (hw *helpWriter) Help(output io.Writer, banner string, subModes []string, a
 
 	// add sub-mode information
 	if len(subModes) > 0 {
-
 		// add an additional new line if we've already printed flag information
 		if len(helpLines) > 2 {
 			output.Write([]byte("\n"))
@@ -85,7 +80,7 @@ func (hw *helpWriter) Help(output io.Writer, banner string, subModes []string, a
 	}
 }
 
-// Write buffers all output
+// Write buffers all output.
 func (hw *helpWriter) Write(p []byte) (n int, err error) {
 	hw.buffer = append(hw.buffer, p...)
 	return len(p), nil

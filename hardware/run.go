@@ -12,22 +12,19 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package hardware
 
-import "github.com/jetsetilly/gopher2600/television"
+import (
+	"github.com/jetsetilly/gopher2600/hardware/memory/cartridge/supercharger"
+	"github.com/jetsetilly/gopher2600/hardware/television/signal"
+)
 
 // Run sets the emulation running as quickly as possible. continuteCheck()
 // should return false when an external event (eg. a GUI event) indicates that
 // the emulation should stop.
 func (vcs *VCS) Run(continueCheck func() (bool, error)) error {
 	var err error
-
-	continueCheck()
 
 	if continueCheck == nil {
 		continueCheck = func() (bool, error) { return true, nil }
@@ -36,7 +33,7 @@ func (vcs *VCS) Run(continueCheck func() (bool, error)) error {
 	// see the equivalient videoCycle() in the VCS.Step() function for an
 	// explanation for what's going on here:
 	videoCycle := func() error {
-		if err := vcs.checkDeviceInput(); err != nil {
+		if err := vcs.RIOT.Ports.GetPlayback(); err != nil {
 			return err
 		}
 
@@ -56,6 +53,7 @@ func (vcs *VCS) Run(continueCheck func() (bool, error)) error {
 		}
 
 		vcs.RIOT.Step()
+		vcs.Mem.Cart.Step()
 
 		return nil
 	}
@@ -64,9 +62,18 @@ func (vcs *VCS) Run(continueCheck func() (bool, error)) error {
 	for cont {
 		err = vcs.CPU.ExecuteInstruction(videoCycle)
 		if err != nil {
-			return err
+			// see debugger.inputLoop() function for explanation
+			if onTapeLoaded, ok := err.(supercharger.FastLoaded); ok {
+				vcs.CPU.Interrupted = true
+				vcs.CPU.LastResult.Final = true
+				err = onTapeLoaded(vcs.CPU, vcs.Mem.RAM, vcs.RIOT.Timer)
+				if err != nil {
+					return err
+				}
+			} else {
+				return err
+			}
 		}
-
 		cont, err = continueCheck()
 	}
 
@@ -81,25 +88,19 @@ func (vcs *VCS) RunForFrameCount(numFrames int, continueCheck func(frame int) (b
 		continueCheck = func(frame int) (bool, error) { return true, nil }
 	}
 
-	fn, err := vcs.TV.GetState(television.ReqFramenum)
-	if err != nil {
-		return err
-	}
-
-	targetFrame := fn + numFrames
+	frameNum := vcs.TV.GetState(signal.ReqFramenum)
+	targetFrame := frameNum + numFrames
 
 	cont := true
-	for fn != targetFrame && cont {
-		err = vcs.Step(nil)
-		if err != nil {
-			return err
-		}
-		fn, err = vcs.TV.GetState(television.ReqFramenum)
+	for frameNum != targetFrame && cont {
+		err := vcs.Step(nil)
 		if err != nil {
 			return err
 		}
 
-		cont, err = continueCheck(fn)
+		frameNum = vcs.TV.GetState(signal.ReqFramenum)
+
+		cont, err = continueCheck(frameNum)
 		if err != nil {
 			return err
 		}

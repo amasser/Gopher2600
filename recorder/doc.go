@@ -12,16 +12,13 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 // Package recorder handles recording and playback of user input. The Recorder
 // type implements the riot.input.EventRecorder() interface. Once added as a
 // transcriber to the VCS port, it will record all user input to the specified
 // file.
 //
-// Currently, a recorder and playback is attached to all ports of the VCS,
-// including the panel.
+// To keep things simple, recording gameplay will use the VCS in it's default
+// state. Future versions of the recorder fileformat will support localised
+// preferences.
 package recorder

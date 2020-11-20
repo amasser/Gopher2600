@@ -12,10 +12,6 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 // Package TIA implements the custom video/audio chip found in the the VCS. The
 // TIA is an extremely tricky device and great effort has been expended in
@@ -62,7 +58,7 @@
 // defer to the code and commentary for the fuller description of what is
 // happening, but it is  sufficient to say here that some side effects must
 // take place before others. The various Update*() functions in the tia package
-// and sub-packages help achive this.
+// and sub-packages help achieve this.
 //
 // At the end of every Step() function (the end of the video cycle) the TV
 // signal is compiled and sent to the attached television.

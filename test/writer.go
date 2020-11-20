@@ -12,10 +12,6 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package test
 
@@ -30,7 +26,17 @@ func (tw *Writer) Write(p []byte) (n int, err error) {
 	return len(p), nil
 }
 
-// Compare buffered output with predefined/example string
+// clear string empties the buffer.
+func (tw *Writer) Clear() {
+	tw.buffer = tw.buffer[:0]
+}
+
+// Compare buffered output with predefined/example string.
 func (tw *Writer) Compare(s string) bool {
 	return s == string(tw.buffer)
+}
+
+// implements Stringer interface.
+func (tw *Writer) String() string {
+	return string(tw.buffer)
 }

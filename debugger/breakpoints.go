@@ -12,10 +12,6 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 // breakpoints are used to halt execution when a  target is *changed to* a
 // specific value.  compare to traps which are used to halt execution when the
@@ -28,13 +24,14 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/jetsetilly/gopher2600/curated"
 	"github.com/jetsetilly/gopher2600/debugger/terminal"
 	"github.com/jetsetilly/gopher2600/debugger/terminal/commandline"
 	"github.com/jetsetilly/gopher2600/disassembly"
-	"github.com/jetsetilly/gopher2600/errors"
+	"github.com/jetsetilly/gopher2600/hardware/memory/memorymap"
 )
 
-// breakpoints keeps track of all the currently defined breakers
+// breakpoints keeps track of all the currently defined breakers.
 type breakpoints struct {
 	dbg *Debugger
 
@@ -47,7 +44,7 @@ type breakpoints struct {
 	checkBankBreak *target
 }
 
-// breaker defines a specific break condition
+// breaker defines a specific break condition.
 type breaker struct {
 	target *target
 
@@ -125,11 +122,12 @@ const (
 )
 
 // check checks the specific break condition with the current value of
-// the break target
+// the break target.
 func (bk *breaker) check() checkResult {
 	currVal := bk.target.TargetValue()
 	m := currVal == bk.value
 	if !m {
+		bk.ignoreValue = nil
 		return checkNoMatch
 	}
 
@@ -148,7 +146,7 @@ func (bk *breaker) check() checkResult {
 	return checkMatch
 }
 
-// add a new breaker by linking it to the end of an existing breaker
+// add a new breaker by linking it to the end of an existing breaker.
 func (bk *breaker) add(nbk *breaker) {
 	n := bk
 	for n.next != nil {
@@ -157,7 +155,7 @@ func (bk *breaker) add(nbk *breaker) {
 	n.next = nbk
 }
 
-// newBreakpoints is the preferred method of initialisation for breakpoints
+// newBreakpoints is the preferred method of initialisation for breakpoints.
 func newBreakpoints(dbg *Debugger) (*breakpoints, error) {
 	bp := &breakpoints{dbg: dbg}
 	bp.clear()
@@ -166,26 +164,26 @@ func newBreakpoints(dbg *Debugger) (*breakpoints, error) {
 
 	bp.checkPcBreak, err = parseTarget(bp.dbg, commandline.TokeniseInput("PC"))
 	if err != nil {
-		return nil, errors.New(errors.BreakpointError, "fatality while setting up breakpoint parser")
+		return nil, curated.Errorf("breakpoint: this should not have failed: %v", err)
 	}
 
 	bp.checkBankBreak, err = parseTarget(bp.dbg, commandline.TokeniseInput("BANK"))
 	if err != nil {
-		return nil, errors.New(errors.BreakpointError, "fatality while setting up breakpoint parser")
+		return nil, curated.Errorf("breakpoint: this should not have failed: %v", err)
 	}
 
 	return bp, err
 }
 
-// clear all breakpoints
+// clear all breakpoints.
 func (bp *breakpoints) clear() {
 	bp.breaks = make([]breaker, 0, 10)
 }
 
-// drop a specific breakpoint by position in list
+// drop a specific breakpoint by position in list.
 func (bp *breakpoints) drop(num int) error {
 	if len(bp.breaks)-1 < num {
-		return errors.New(errors.CommandError, fmt.Sprintf("breakpoint #%d is not defined", num))
+		return curated.Errorf("breakpoint #%d is not defined", num)
 	}
 
 	h := bp.breaks[:num]
@@ -199,8 +197,12 @@ func (bp *breakpoints) drop(num int) error {
 
 // check compares the current state of the emulation with every breakpoint
 // condition. returns a string listing every condition that matches (separated
-// by \n)
+// by \n).
 func (bp *breakpoints) check(previousResult string) string {
+	if len(bp.breaks) == 0 {
+		return previousResult
+	}
+
 	checkString := strings.Builder{}
 	checkString.WriteString(previousResult)
 	for i := range bp.breaks {
@@ -212,7 +214,7 @@ func (bp *breakpoints) check(previousResult string) string {
 	return checkString.String()
 }
 
-// list currently defined breakpoints
+// list currently defined breakpoints.
 func (bp breakpoints) list() {
 	if len(bp.breaks) == 0 {
 		bp.dbg.printLine(terminal.StyleFeedback, "no breakpoints")
@@ -241,8 +243,8 @@ func (bp breakpoints) list() {
 //
 //	& SL 100 HP 0 X 10
 //
-// !!TODO: simplify breakpoints parser to match help description
-func (bp *breakpoints) parseBreakpoint(tokens *commandline.Tokens) error {
+// !!TODO: simplify breakpoints parser to match help description.
+func (bp *breakpoints) parseCommand(tokens *commandline.Tokens) error {
 	andBreaks := false
 
 	// default target of CPU PC. meaning that "BREAK n" will cause a breakpoint
@@ -251,7 +253,7 @@ func (bp *breakpoints) parseBreakpoint(tokens *commandline.Tokens) error {
 	// something appropriate
 	tgt, err := parseTarget(bp.dbg, commandline.TokeniseInput("PC"))
 	if err != nil {
-		return errors.New(errors.BreakpointError, "fatality while setting up breakpoint parser")
+		return curated.Errorf("breakpoint: this should not have failed: %v", err)
 	}
 
 	// resolvedTarget keeps track of whether we have specified a target but not
@@ -263,10 +265,8 @@ func (bp *breakpoints) parseBreakpoint(tokens *commandline.Tokens) error {
 	// them to newBreaks first and then check that we aren't adding duplicates
 	newBreaks := make([]breaker, 0, 10)
 
-	// a note about whether the PC target has been specified explicitely. we
-	// use this to decide whether to add an automatic BANK condition to PC
-	// targets (see below)
-	explicitPCTarget := false
+	// whether to add a bank condition to a singular PC BREAK target
+	addBankCondition := true
 
 	// loop over tokens:
 	//	o if token is a valid type value then add the breakpoint for the current target
@@ -298,10 +298,10 @@ func (bp *breakpoints) parseBreakpoint(tokens *commandline.Tokens) error {
 			case "false":
 				val = false
 			default:
-				err = errors.New(errors.CommandError, fmt.Sprintf("invalid value (%s) for target (%s)", tok, tgt.Label()))
+				err = curated.Errorf("invalid value (%s) for target (%s)", tok, tgt.Label)
 			}
 		default:
-			return errors.New(errors.CommandError, fmt.Sprintf("unsupported value type (%T) for target (%s)", tgt.TargetValue(), tgt.Label()))
+			return curated.Errorf("unsupported value type (%T) for target (%s)", tgt.TargetValue(), tgt.Label())
 		}
 
 		if err == nil {
@@ -309,6 +309,10 @@ func (bp *breakpoints) parseBreakpoint(tokens *commandline.Tokens) error {
 			if tgt.Label() == "PC" {
 				ai := bp.dbg.dbgmem.mapAddress(uint16(val.(int)), true)
 				val = int(ai.mappedAddress)
+
+				// unusual case but if PC break is not in cartridge area we
+				// don't want to add a bank condition
+				addBankCondition = addBankCondition && ai.area == memorymap.Cartridge
 			}
 
 			if andBreaks {
@@ -318,11 +322,10 @@ func (bp *breakpoints) parseBreakpoint(tokens *commandline.Tokens) error {
 				newBreaks = append(newBreaks, breaker{target: tgt, value: val})
 				resolvedTarget = true
 			}
-
 		} else {
 			// make sure we've not left a previous target dangling without a value
 			if !resolvedTarget {
-				return errors.New(errors.CommandError, err)
+				return curated.Errorf("%v", err)
 			}
 
 			// possibly switch composition mode
@@ -331,18 +334,18 @@ func (bp *breakpoints) parseBreakpoint(tokens *commandline.Tokens) error {
 			} else if tok == "|" {
 				andBreaks = false
 			} else {
-				// note whether PC target has been specified explicitly
-				explicitPCTarget = explicitPCTarget || strings.ToUpper(tok) == "PC"
+				// if PC target has not been explicitly specified then add
+				// bank condition
+				addBankCondition = addBankCondition && strings.ToUpper(tok) != "PC"
 
 				// token is not a number or a composition symbol so try to
 				// parse a new target
 				tokens.Unget()
 				tgt, err = parseTarget(bp.dbg, tokens)
 				if err != nil {
-					return errors.New(errors.CommandError, err)
+					return curated.Errorf("%v", err)
 				}
 				resolvedTarget = false
-
 			}
 		}
 
@@ -350,25 +353,25 @@ func (bp *breakpoints) parseBreakpoint(tokens *commandline.Tokens) error {
 	}
 
 	if !resolvedTarget {
-		return errors.New(errors.CommandError, fmt.Sprintf("need a value (%T) to break on (%s)", tgt.TargetValue(), tgt.Label()))
+		return curated.Errorf("need a value (%T) to break on (%s)", tgt.TargetValue(), tgt.Label)
 	}
 
 	for _, nb := range newBreaks {
 		// if the break is a singular, undecorated PC target then add a BANK
 		// condition for the current BANK. this is arguably what the user
 		// intends to happen.
-		if nb.next == nil && nb.target.label == "PC" && !explicitPCTarget {
-			if bp.dbg.vcs.Mem.Cart.NumBanks() > 1 {
+		if nb.next == nil && nb.target.label == "PC" && addBankCondition {
+			if bp.dbg.VCS.Mem.Cart.NumBanks() > 1 {
 				nb.next = &breaker{
 					target: bankTarget(bp.dbg),
-					value:  bp.dbg.vcs.Mem.Cart.GetBank(bp.dbg.vcs.CPU.PC.Address()),
+					value:  bp.dbg.VCS.Mem.Cart.GetBank(bp.dbg.VCS.CPU.PC.Address()).Number,
 				}
 				nb.next.ignoreValue = nb.next.value
 			}
 		}
 
 		if i := bp.checkBreaker(nb); i != noBreakEqualivalent {
-			return errors.New(errors.CommandError, fmt.Sprintf("already exists (%s)", bp.breaks[i]))
+			return curated.Errorf("already exists (%s)", bp.breaks[i])
 		}
 		bp.breaks = append(bp.breaks, nb)
 	}
@@ -379,7 +382,7 @@ func (bp *breakpoints) parseBreakpoint(tokens *commandline.Tokens) error {
 const noBreakEqualivalent = -1
 
 // checkBreaker returns the index number of the matching breakpoint. returns
-// noBreakEquivalent if no match is found
+// noBreakEquivalent if no match is found.
 func (bp *breakpoints) checkBreaker(nb breaker) int {
 	for n, ob := range bp.breaks {
 		if nb.cmp(ob) {
@@ -390,17 +393,17 @@ func (bp *breakpoints) checkBreaker(nb breaker) int {
 	return noBreakEqualivalent
 }
 
-// BreakGroup indicates the broad category of breakpoint an address has
+// BreakGroup indicates the broad category of breakpoint an address has.
 type BreakGroup int
 
-// List of valid BreakGroup values
+// List of valid BreakGroup values.
 const (
 	BrkNone BreakGroup = iota
 
-	// a breakpoint
+	// a breakpoint.
 	BrkPCAddress
 
-	// a breakpoint on something other than the program counter / address
+	// a breakpoint on something other than the program counter / address.
 	BrkOther
 )
 
@@ -423,7 +426,7 @@ func (bp *breakpoints) hasBreak(e *disassembly.Entry) (BreakGroup, int) {
 
 		// critical that we cast to int because we'll be comparing against the
 		// result of cartridge.GetBank()
-		value: e.Bank,
+		value: e.Bank.Number,
 	}
 
 	// check for a breaker for the PC value AND bank value. if
@@ -452,14 +455,7 @@ func (bp *breakpoints) togglePCBreak(e *disassembly.Entry) {
 	g, i := bp.hasBreak(e)
 
 	if i != noBreakEqualivalent && g == BrkPCAddress {
-		bp.drop(i)
-
-		// try again incase there's a similar breakpoint (without a BANK
-		// condition)
-		if i != noBreakEqualivalent && g == BrkPCAddress {
-			bp.drop(i)
-		}
-
+		_ = bp.drop(i) // ignoring errors
 		return
 	}
 
@@ -472,12 +468,12 @@ func (bp *breakpoints) togglePCBreak(e *disassembly.Entry) {
 		value: int(ai.mappedAddress),
 	}
 
-	if bp.dbg.vcs.Mem.Cart.NumBanks() > 1 {
+	if bp.dbg.VCS.Mem.Cart.NumBanks() > 1 {
 		nb.next = &breaker{
 			target: bp.checkBankBreak,
 
 			// see above for casting commentary
-			value: e.Bank,
+			value: e.Bank.Number,
 		}
 	}
 

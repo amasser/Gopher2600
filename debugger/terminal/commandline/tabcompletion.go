@@ -12,10 +12,6 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package commandline
 
@@ -39,7 +35,7 @@ type TabCompletion struct {
 }
 
 // NewTabCompletion initialises a new TabCompletion instance. Completion works
-// best if Commands has been sorted
+// best if Commands has been sorted.
 func NewTabCompletion(cmds *Commands) *TabCompletion {
 	tc := &TabCompletion{cmds: cmds}
 	tc.Reset()
@@ -49,7 +45,7 @@ func NewTabCompletion(cmds *Commands) *TabCompletion {
 // Complete transforms the input such that the last word in the input is
 // expanded to meet the closest match allowed by the template.  Subsequent
 // calls to Complete() without an intervening call to Reset() will cycle
-// through the original available options
+// through the original available options.
 func (tc *TabCompletion) Complete(input string) string {
 	// split input tokens -- it's easier to work with tokens
 	tokens := TokeniseInput(input)
@@ -133,6 +129,13 @@ func (tc *TabCompletion) Reset() {
 }
 
 func (tc *TabCompletion) buildMatches(n *node, tokens *Tokens) {
+	// if there is no more input then return true (validation has passed) if
+	// the node is optional, false if it is required
+	tok, ok := tokens.Get()
+	if !ok {
+		return
+	}
+
 	// we cannot do anything with a node with no tag, but if there is a "next"
 	// node then we can move immediately to validation of that node instead.
 	//
@@ -141,28 +144,20 @@ func (tc *TabCompletion) buildMatches(n *node, tokens *Tokens) {
 	// a node with an empty tag but no next array (or a next array with to
 	// many entries) is an illegal node and should not have been parsed
 	if n.tag == "" {
-		if n.next == nil || len(n.next) > 1 {
+		if n.next == nil {
 			return
 		}
 
-		tc.buildMatches(n.next[0], tokens)
+		tokens.Unget()
+		for ni := range n.next {
+			tc.buildMatches(n.next[ni], tokens)
+		}
 
 		for bi := range n.branch {
-			// we want to use the current token again so we unget() the
-			// last token so that it is available at the beginning of the
-			// recursed function
 			tokens.Unget()
-
 			tc.buildMatches(n.branch[bi], tokens)
 		}
 
-		return
-	}
-
-	// if there is no more input then return true (validation has passed) if
-	// the node is optional, false if it is required
-	tok, ok := tokens.Get()
-	if !ok {
 		return
 	}
 

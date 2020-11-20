@@ -12,17 +12,19 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package sdlimgui
 
 import (
+	"fmt"
+	"os"
 	"strings"
+	"time"
 
 	"github.com/jetsetilly/gopher2600/debugger/terminal"
+	"github.com/jetsetilly/gopher2600/gui"
+	"github.com/jetsetilly/gopher2600/logger"
+	"github.com/jetsetilly/gopher2600/prefs"
 
 	"github.com/inkyblackness/imgui-go/v2"
 )
@@ -37,12 +39,16 @@ type winTerm struct {
 	term *term
 
 	input      string
-	prompt     string
+	prompt     terminal.Prompt
 	output     []terminalOutput
 	moreOutput bool
 
 	history    []string
 	historyIdx int
+
+	commandLineHeight float32
+
+	openOnError prefs.Bool
 }
 
 func newWinTerm(img *SdlImgui) (managedWindow, error) {
@@ -65,7 +71,6 @@ func (win *winTerm) id() string {
 	return winTermTitle
 }
 
-// draw is called by service loop
 func (win *winTerm) draw() {
 	done := false
 	for !done {
@@ -80,6 +85,10 @@ func (win *winTerm) draw() {
 				win.output = append(win.output[1:], t)
 			} else {
 				win.output = append(win.output, t)
+			}
+
+			if win.openOnError.Get().(bool) && t.style == terminal.StyleError {
+				win.setOpen(true)
 			}
 
 			win.moreOutput = true
@@ -102,6 +111,17 @@ func (win *winTerm) draw() {
 	imgui.PopStyleVar()
 	imgui.PopStyleColor()
 
+	// scrollback
+	height := imguiRemainingWinHeight() - win.commandLineHeight
+	imgui.BeginChildV("scrollback", imgui.Vec2{X: 0, Y: height}, false, 0)
+
+	// make a note if scrollback has been clicked or is active. we'll use this
+	// to help focus the keyboard for the command line.
+	//
+	// the OR condition is so that the focus isn't lost after a drag event
+	// (damned weird if you ask me)
+	scrollbackActive := imgui.IsItemActive() || (imgui.IsWindowHovered() && imgui.IsMouseReleased(0))
+
 	// only draw elements that will be visible
 	var clipper imgui.ListClipper
 	clipper.Begin(len(win.output))
@@ -111,31 +131,60 @@ func (win *winTerm) draw() {
 		}
 	}
 
-	if len(win.output) > 0 {
-		imgui.Spacing()
-		imgui.Separator()
-		imgui.Spacing()
+	// if output has been added to, scroll to bottom of window
+	if win.moreOutput {
+		win.moreOutput = false
+		imgui.SetScrollHereY(1.0)
 	}
 
-	// prompt
-	imgui.AlignTextToFramePadding()
-	imgui.Text(win.prompt)
+	imgui.EndChild()
+
+	// context menu for scrollback area
+	if imgui.BeginPopupContextItem() {
+		if imgui.Selectable("Save output to file") {
+			win.saveOutput()
+		}
+		if imgui.Selectable("Clear terminal") {
+			win.output = win.output[:0]
+		}
+		imgui.EndPopup()
+	}
+
+	// command line prompt on same line as command
+	//
+	// there's a problem with using prompts like this in a gui context. for
+	// example, if we change the PC through the CPU window the state of the
+	// machine will change but the terminal prompt will not. it's solvable but
+	// any solution seems heavy handed for such an outlier case.
+	//
+	// one possibility is to build the prompt dynamically from the information
+	// we have from the lazy system, and not using the prompt received through
+	// the prompt channel at all
+	if win.img.state == gui.StatePaused {
+		// !!TODO: fancier prompt for GUI terminal
+		imguiText(strings.TrimSpace(win.prompt.String()))
+	} else {
+		imguiText("[ running ] >>")
+	}
 	imgui.SameLine()
 
-	// this construct says focus the next InputText() box if
-	//  - the terminal window is focused
-	//  - AND if nothing else has been activated since last frame
-	if imgui.IsWindowFocused() && !imgui.IsAnyItemActive() {
-		imgui.SetKeyboardFocusHere()
-	}
+	// start command line height measurement
+	commandLineHeight := imgui.CursorPosY()
 
 	// draw command input box
 	imgui.PushItemWidth(imgui.WindowWidth() - imgui.CursorPosX())
 	imgui.PushStyleColor(imgui.StyleColorFrameBg, win.img.cols.TermBackground)
+
+	// this construct says focus the next InputText() box if
+	//  - the terminal window is focused
+	//  - AND if nothing else has been activated since last frame
+	if (imgui.IsWindowFocused() && !imgui.IsAnyItemActive()) || scrollbackActive {
+		imgui.SetKeyboardFocusHere()
+	}
+
 	if imgui.InputTextV("", &win.input,
 		imgui.InputTextFlagsEnterReturnsTrue|imgui.InputTextFlagsCallbackCompletion|imgui.InputTextFlagsCallbackHistory,
 		win.tabCompleteAndHistory) {
-
 		win.input = strings.TrimSpace(win.input)
 
 		// send input to inputChan even if it is the empty string because
@@ -144,7 +193,10 @@ func (win *winTerm) draw() {
 
 		// only add input to history if it is not empty
 		if win.input != "" {
-			win.history = append(win.history, win.input)
+			// only add if input is not the same as the last history entry
+			if len(win.history) == 0 || win.input != win.history[len(win.history)-1] {
+				win.history = append(win.history, win.input)
+			}
 			win.historyIdx = len(win.history) - 1
 		}
 
@@ -157,13 +209,43 @@ func (win *winTerm) draw() {
 	// it doesn't look goofy
 	imgui.Spacing()
 
-	// if output has been added to, scroll to bottom of window
-	if win.moreOutput {
-		win.moreOutput = false
-		imgui.SetScrollHereY(1.0)
-	}
+	// commit command line height measurement
+	win.commandLineHeight = imgui.CursorPosY() - commandLineHeight
 
 	imgui.End()
+}
+
+func (win *winTerm) saveOutput() {
+	n := time.Now()
+	fn := fmt.Sprintf("terminal_%s", fmt.Sprintf("%04d%02d%02d_%02d%02d%02d",
+		n.Year(), n.Month(), n.Day(), n.Hour(), n.Minute(), n.Second()))
+
+	f, err := os.Create(fn)
+	if err != nil {
+		win.output = append(win.output, terminalOutput{
+			style: terminal.StyleError,
+			cols:  win.img.cols,
+			text:  "could not save terminal output",
+		})
+		return
+	}
+	defer func() {
+		err := f.Close()
+		if err != nil {
+			logger.Log("sdlimgui", fmt.Sprintf("error saving terminal contents: %v", err))
+		}
+	}()
+
+	for _, o := range win.output {
+		f.Write([]byte(o.text))
+		f.Write([]byte("\n"))
+	}
+
+	win.output = append(win.output, terminalOutput{
+		style: terminal.StyleFeedback,
+		cols:  win.img.cols,
+		text:  fmt.Sprintf("terminal output saved to %s", fn),
+	})
 }
 
 func (win *winTerm) tabCompleteAndHistory(d imgui.InputTextCallbackData) int32 {
@@ -191,11 +273,11 @@ func (win *winTerm) tabCompleteAndHistory(d imgui.InputTextCallbackData) int32 {
 		// next history item
 		if win.historyIdx < len(win.history)-1 {
 			b := string(d.Buffer())
-			d.DeleteBytes(0, len(b))
-			d.InsertBytes(0, []byte(win.history[win.historyIdx]))
 			if win.historyIdx < len(win.history)-1 {
 				win.historyIdx++
 			}
+			d.DeleteBytes(0, len(b))
+			d.InsertBytes(0, []byte(win.history[win.historyIdx]))
 		} else {
 			b := string(d.Buffer())
 			d.DeleteBytes(0, len(b))
@@ -205,7 +287,7 @@ func (win *winTerm) tabCompleteAndHistory(d imgui.InputTextCallbackData) int32 {
 	return 0
 }
 
-// terminalOutput represents the lines that are printed to the terminal output
+// terminalOutput represents the lines that are printed to the terminal output.
 type terminalOutput struct {
 	style terminal.Style
 	cols  *imguiColors
@@ -214,20 +296,11 @@ type terminalOutput struct {
 
 func (l terminalOutput) draw() {
 	switch l.style {
-	case terminal.StyleInput:
-		imgui.PushStyleColor(imgui.StyleColorText, l.cols.TermStyleInput)
+	case terminal.StyleEcho:
+		imgui.PushStyleColor(imgui.StyleColorText, l.cols.TermStyleEcho)
 
 	case terminal.StyleHelp:
 		imgui.PushStyleColor(imgui.StyleColorText, l.cols.TermStyleHelp)
-
-	case terminal.StylePromptCPUStep:
-		imgui.PushStyleColor(imgui.StyleColorText, l.cols.TermStylePromptCPUStep)
-
-	case terminal.StylePromptVideoStep:
-		imgui.PushStyleColor(imgui.StyleColorText, l.cols.TermStylePromptVideoStep)
-
-	case terminal.StylePromptConfirm:
-		imgui.PushStyleColor(imgui.StyleColorText, l.cols.TermStylePromptConfirm)
 
 	case terminal.StyleFeedback:
 		imgui.PushStyleColor(imgui.StyleColorText, l.cols.TermStyleFeedback)
@@ -241,12 +314,11 @@ func (l terminalOutput) draw() {
 	case terminal.StyleInstrument:
 		imgui.PushStyleColor(imgui.StyleColorText, l.cols.TermStyleInstrument)
 
-	case terminal.StyleFeedbackNonInteractive:
-		// just use regular feedback style for this
-		imgui.PushStyleColor(imgui.StyleColorText, l.cols.TermStyleFeedback)
-
 	case terminal.StyleError:
 		imgui.PushStyleColor(imgui.StyleColorText, l.cols.TermStyleError)
+
+	case terminal.StyleLog:
+		imgui.PushStyleColor(imgui.StyleColorText, l.cols.TermStyleLog)
 	}
 
 	imgui.Text(l.text)

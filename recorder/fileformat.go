@@ -12,10 +12,6 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package recorder
 
@@ -25,7 +21,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/jetsetilly/gopher2600/errors"
+	"github.com/jetsetilly/gopher2600/curated"
 )
 
 const (
@@ -70,7 +66,7 @@ func (rec *Recorder) writeHeader() error {
 	lines[lineVersion] = versionString
 	lines[lineCartName] = rec.vcs.Mem.Cart.Filename
 	lines[lineCartHash] = rec.vcs.Mem.Cart.Hash
-	lines[lineTVSpec] = fmt.Sprintf("%v\n", rec.vcs.TV.SpecIDOnCreation())
+	lines[lineTVSpec] = fmt.Sprintf("%v\n", rec.vcs.TV.GetReqSpecID())
 
 	line := strings.Join(lines, "\n")
 
@@ -78,12 +74,12 @@ func (rec *Recorder) writeHeader() error {
 
 	if err != nil {
 		rec.output.Close()
-		return errors.New(errors.RecordingError, err)
+		return curated.Errorf("recorder: %v", err)
 	}
 
 	if n != len(line) {
 		rec.output.Close()
-		return errors.New(errors.RecordingError, "output truncated")
+		return curated.Errorf("recorder: output truncated")
 	}
 
 	return nil
@@ -91,7 +87,7 @@ func (rec *Recorder) writeHeader() error {
 
 func (plb *Playback) readHeader(lines []string) error {
 	if lines[lineMagicString] != magicString {
-		return errors.New(errors.PlaybackError, fmt.Sprintf("not a valid playback transcript (%s)", plb.transcript))
+		return curated.Errorf("playback: not a valid transcript (%s)", plb.transcript)
 	}
 
 	// read header
@@ -123,7 +119,6 @@ func IsPlaybackFile(filename string) bool {
 	}
 	if string(b) != magicString+"\n" {
 		return false
-
 	}
 
 	// version number verification

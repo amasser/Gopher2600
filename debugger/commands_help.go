@@ -12,10 +12,6 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package debugger
 
@@ -76,6 +72,10 @@ exit.
 When manually writing a script in text editor it is sometimes useful to write
 comments.  Comments are line oriented and are indicated by the # character.`,
 
+	cmdRewind: `Rewind emulation to the numbered frame or to LAST, which will
+be 'current' execution state. If numbered frame is not in rewind history,
+emulation will move to the nearest frame that is.`,
+
 	cmdInsert: `Insert cartridge into emulation. Cartridge names (with paths) beginning with
 http:// will loaded via the http protocol. If no such protocol is present, the
 cartridge will be loaded from disk.`,
@@ -106,7 +106,7 @@ Will return:
 	CXM1P (read) -> 0x0001
 
 This tells us that the cxm0p symbol is recognised, is a symbol for a read
-address and referes to adress 0x0001. Many symbols point to addresses that are
+address and referes to address 0x0001. Many symbols point to addresses that are
 mirrored. You can quickly see this with the MIRRORS or ALL argument.
 
 	SYMBOL CXM1P MIRRORS
@@ -114,34 +114,35 @@ mirrored. You can quickly see this with the MIRRORS or ALL argument.
 The above example will return every address that mirrors the primary address.
 
 The second mode of operation allows you to view all the symbols in each symbol
-table. There are three symbol tables: READ, WRITE and LOCATION.
+table. There are three symbol tables: READ, WRITE and LABEL.
 
 Note that a cartridge without an accompanying symbols file will only have the
-canonical Atari VCS symbols defined.`,
+canonical Atari VCS symbols defined and possibly symbols associated with a
+particular cartridge type.`,
 
 	cmdOnHalt: `Define commands to run whenever emulation is halted. A halt is
 caused by a BREAK, a TRAP, a WATCH or a manual interrupt. Specify multiple
-commands by seperating with a comma.
+commands by separating with a comma.
 
 THE OFF argument can be used to toggle the ONHALT commands temporarily. Use the
 ON argument to resume ONSTEP reporting.`,
 
 	cmdOnStep: `Define commands to run whenever emulation moves forward one step. A step
-is defined by the QUANTUM command. Specify multiple commands by seperating with
+is defined by the QUANTUM command. Specify multiple commands by separating with
 a comma.
 
 THE OFF argument can be used to toggle the ONSTEP commands temporarily. Use the
-ON argument to resume ONSTEP reporting.
+ON argument to resume ONSTEP reporting.`,
 
-By default the ONSTEP command is
-
-	ONSTEP LAST`,
+	cmdOnTrace: `Define commands to run whenever a trace condition is met. Unlike the ONSTEP
+and ONHALT commands there is no OFF argument.`,
 
 	cmdLast: `Prints the disassembly of the last cpu/video cycle. Use the BYTECODE argument 
 to display the raw bytes alongside the disassembly. The DEFN argument meanwhile
 will display the definition of the opcode that was used during execution.`,
 
-	cmdMemMap: "Display high-level VCS memory map.",
+	cmdMemMap: `Display high-level VCS memory map. With the optional address argument information
+about the address will be displayed.`,
 
 	cmdCPU: `Display the current state of the CPU. The SET argument can be used to change the
 contents of the CPU registers.`,
@@ -155,10 +156,7 @@ or numerically. Mulptiple data values will be poked into consecutive addresses.`
 	cmdRAM: `Display the current contents of RAM. The optional CART argument will display any
 additional RAM in the cartridge.`,
 
-	cmdTimer: "Display the current state of the RIOT Timer.",
-
-	cmdTIA: `Display current state of the TIA. Without an arugment the command will display
-video information:
+	cmdTIA: `Display current state of the TIA video signal:
 
         111011 (09) _.--*__.--._ 39 13.0
 
@@ -172,10 +170,10 @@ video information:
                                      |
                cpu cycles -----------+
 
-Video and CPU cycles are counted from the beginning of the current scanline.
+Video and CPU cycles are counted from the beginning of the current scanline.`,
 
-The TIA command can take one of two optional arguments. DELAYS will display
-current delay information for all TIA video components.`,
+	cmdRIOT: `Display current state of the RIOT. Without an argument the command will display
+information about the RIOT ports (SWCHA, etc.)`,
 
 	cmdAudio: `Display the current state of the audio subsystem.
 
@@ -188,7 +186,10 @@ current delay information for all TIA video components.`,
                               |
            volume ------------+`,
 
-	cmdTV: "Display the current TV state.",
+	cmdTV: `Display the current TV state. Optional argument SPEC will display the currently
+selected TV specification. Supplying an argument to the TV SPEC command will set the TV to that
+specification. AUTO indicates that the specification will change if the condition of the TV signal
+suggest that it should.`,
 
 	cmdPlayer: `Display the current state of the player sprites. The player information to
 display can be selected with 0 or 1 arguments. Omitting this argument will show
@@ -356,19 +357,36 @@ The OVERLAY ON and OVERLAY OFF arguments toggle a debugging overlay. This
 overlay decorates the display with markers showing when during the drawing
 process key video events were triggered.`,
 
+	// peripherals (components that might not be present)
+	cmdPlusROM: `Controls the attached PlusROM. HOST and PATH can be changed on a per cartridge
+basis and only for the duration of the session (the ROM must be changed for it to be permanent).
+
+The NICK and ID can be changed for the session but also be saved to disk and be used across
+all PlusROM cartridges.`,
+
 	// user input
-	cmdPanel: "Inspect and set front panel settings. Switches can be set or toggled..",
+	cmdController: `Change the current controller type for the specified player. The AUTO
+controller handles changes of controller according to user input and where possible what
+can be inferred from the ROM.`,
+
+	cmdPanel: "Inspect and set front panel settings. Switches can be set or toggled.",
 
 	cmdStick: `Set joystick input for Player 0 or Player 1 for the next and
 subsequent video cycles.
+
+If the current controller for that player is not a stick (or the auto controller type) then
+an error will be returned.
 
 Specify the player with the 0 or 1 arguments.
 
 Note that it is possible to set the stick combinations that would normally not
 be possible with a joystick. For example, LEFT and RIGHT set at the same time.`,
 
-	cmdKeypad: `Set keyboard input for Player 0 or Player 1 for the next and subsequent
+	cmdKeyboard: `Set the keyboard input for Player 0 or Player 1 for the next and subsequent
 video cycles.
+
+If the current controller for that player is not a keyboard (or the auto controller type) then
+an error will be returned.
 
 Specify the player with the 0 or 1 arguments.`,
 
@@ -426,43 +444,71 @@ is triggered. An individual watch can wait for either read access or write
 access of specific address address. Addresses can be specified numerically or
 by symbol.
 
-By default, watching a numeric address will specifically watch for write
-events. This can be changed by specifiying READ as the first argument. For
+By default, watching a numeric address will specifically watch for read
+events. This can be changed by specifying WRITE as the first argument. For
 example:
  
 	WATCH 0x80
 
-	WATCH READ 0x81
+	WATCH WRITE 0x81
 
-The first example watches address 0x80 for write access, while the second will
-watch for read access of address 0x81. To watch a single address for both read and
+The first example watches address 0x80 for read access, while the second will
+watch for write access of address 0x81. To watch a single address for both read and
 write access, two watches are required.
 
-Symbolic address refer to either read or write addresses (possibly both) and
-this affects how symbolic addresses are watched. Consider the following two
-examples:
+Symbolic addresses can be used although you must be mindful of whether the symbol refers to a
+read or write address. For example:
 
 	WATCH VSYNC
 
-	WATCH CXM0P
+is not allowed because VSYNC is a read-only symbol and we default to specifying
+read watches. You must instead specify it as a write watch:
 
-The symbols in both examples refer to memory address 0x0 but specifcally,
-VSYNC is used in the context of the CPU writing to memory and CXM0P in the
-context of reading from memory.  Accordingly, the watches will react to write
-or read events.
+	WATCH WRITE VSYNC
 
 A watch can also watch for a specific value to be written or read from the specified
 address.
 
-	WATCH 0x80 10
+	WATCH WRITE 0x80 10
 
 The above example will watch for the value 10 (decimal) to be written to memory
 address 0x80.
 
+The optional ANY (or MIRRORS) argument will instruct the WATCH to match on any address which is
+the equivalent (or mirror) or the one specified. For example:
+
+	WATCH ANY 0xf000
+
+Will watch for a read access of the cartridge address 0xf000 or any of it's mirrors. In this instance,
+if the CPU attempts to read 0x1000, the watch will match.
+
 Existing watches can be reviewed with the LIST command and deleted with the
 DROP or CLEAR commands`,
 
-	cmdList:  "List currently defined BREAKS, TRAPS and WATCHES.",
-	cmdDrop:  "Drop a specific BREAK, TRAP or WATCH condition, using the number of the condition reported by LIST.",
-	cmdClear: "Clear all BREAKS, TRAPS and WATCHES.",
+	cmdTrace: `"Trace activity on the specied memory address. This means any activity, read or write.
+There is no way to isolate one activity from the other. Use WATCH for that.
+
+When activity at a TRACED address is found the terminal will display the CPU instruction that caused
+the activity. For example, as a result of "TRACE 0x80":
+
+	$f006 STA VSYNC,X -> write 0x0080 (RAM)
+	$faa3 STA $80 -> write 0x0080 (RAM)
+	$f0ed LDA $80 -> read 0x0080 (RAM)
+
+There is currently no ONTRACE command.
+
+Generally, WATCH is a more flexible instrument but TRACE can be useful to quickly gather information
+about an address.`,
+
+	cmdList:  "List currently defined BREAKS, TRAPS, WATCHES and TRACES.",
+	cmdDrop:  "Drop a specific BREAK, TRAP, WATCH or TRACE condition, using the number of the condition reported by LIST.",
+	cmdClear: "Clear all BREAKS, TRAPS, WATCHES and TRACES.",
+
+	// meta
+	cmdPrefs: "Set preferences for debugger.",
+	cmdLog: `Print log to terminal. The LAST argument will cause the most recent log entry to be printed.
+
+Note that while "ONSTEP LOG LAST" is a valid construct it may not print what you expect - it will always print the last
+log entry after every step, even if the last log entry is not new. "ONSTEP LOG LAST; LOG CLEAR" is maybe more intuitive
+but with the maybe unwanted side effect of clearing the log.`,
 }

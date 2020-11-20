@@ -12,14 +12,10 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package database
 
-import "github.com/jetsetilly/gopher2600/errors"
+import "github.com/jetsetilly/gopher2600/curated"
 
 // SelectAll entries in the database. onSelect can be nil.
 //
@@ -28,23 +24,20 @@ import "github.com/jetsetilly/gopher2600/errors"
 //
 // Returns last matched entry in selection or an error with the last entry
 // matched before the error occurred.
-func (db Session) SelectAll(onSelect func(Entry) (bool, error)) (Entry, error) {
+func (db Session) SelectAll(onSelect func(Entry) error) (Entry, error) {
 	var entry Entry
 
 	if onSelect == nil {
-		onSelect = func(_ Entry) (bool, error) { return true, nil }
+		onSelect = func(_ Entry) error { return nil }
 	}
 
 	keyList := db.SortedKeyList()
 
 	for k := range keyList {
 		entry := db.entries[keyList[k]]
-		cont, err := onSelect(entry)
+		err := onSelect(entry)
 		if err != nil {
 			return entry, err
-		}
-		if !cont {
-			break // for loop
 		}
 	}
 
@@ -55,16 +48,16 @@ func (db Session) SelectAll(onSelect func(Entry) (bool, error)) (Entry, error) {
 // if list of keys is empty then all keys are matched (SelectAll() maybe more
 // appropriate in that case). onSelect can be nil.
 //
-// onSelect() should return true if select process is to continue. Continue
-// flag is ignored if error is not nil.
+// onSelect() should return true if select process is to continue. If error is
+// not nil then not continuing the select process is implied.
 //
 // Returns last matched entry in selection or an error with the last entry
 // matched before the error occurred.
-func (db Session) SelectKeys(onSelect func(Entry) (bool, error), keys ...int) (Entry, error) {
+func (db Session) SelectKeys(onSelect func(Entry) error, keys ...int) (Entry, error) {
 	var entry Entry
 
 	if onSelect == nil {
-		onSelect = func(_ Entry) (bool, error) { return true, nil }
+		onSelect = func(_ Entry) error { return nil }
 	}
 
 	keyList := keys
@@ -74,17 +67,14 @@ func (db Session) SelectKeys(onSelect func(Entry) (bool, error), keys ...int) (E
 
 	for i := range keyList {
 		entry = db.entries[keyList[i]]
-		cont, err := onSelect(entry)
+		err := onSelect(entry)
 		if err != nil {
 			return entry, err
-		}
-		if !cont {
-			break // for loop
 		}
 	}
 
 	if entry == nil {
-		return nil, errors.New(errors.DatabaseSelectEmpty)
+		return nil, curated.Errorf("database: select empty")
 	}
 
 	return entry, nil

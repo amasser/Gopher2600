@@ -12,46 +12,93 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package gui
 
+import "github.com/jetsetilly/gopher2600/hardware/memory/cartridge/plusrom"
+
 // FeatureReq is used to request the setting of a gui attribute
-// eg. toggling the overlay
+// eg. toggling the overlay.
 type FeatureReq string
+
+// FeatureReqData represents the information associated with a FeatureReq. See
+// commentary for the defined FeatureReq values for the underlying type.
+type FeatureReqData interface{}
+
+// EmulationState indicates to the GUI that the debugger is in a particular
+// state.
+type EmulationState int
+
+// List of valid emulation states.
+const (
+	StatePaused EmulationState = iota
+	StateRunning
+	StateRewinding
+	StateGotoCoords
+)
 
 // List of valid feature requests. argument must be of the type specified or
 // else the interface{} type conversion will fail and the application will
 // probably crash.
 //
 // Note that, like the name suggests, these are requests, they may or may not
-// be satisifed depending other conditions in the GUI. For example, in the
-// imgui gui implementation, a capture mouse request will only be honoured if
-// the "TV screen" window is active.
+// be satisfied depending other conditions in the GUI.
 const (
-	ReqSetVisibility      FeatureReq = "ReqSetVisibility"      // bool
-	ReqToggleVisibility   FeatureReq = "ReqToggleVisibility"   // none
-	ReqSetVisibleOnStable FeatureReq = "ReqSetVisibleOnStable" // none
-	ReqSetPause           FeatureReq = "ReqSetPause"           // bool
-	ReqSetCropping        FeatureReq = "ReqSetCropping"        // bool
-	ReqToggleCropping     FeatureReq = "ReqToggleCropping"     // none
-	ReqSetAltColors       FeatureReq = "ReqSetAltColors"       // bool
-	ReqToggleAltColors    FeatureReq = "ReqToggleAltColors"    // none
-	ReqSetOverlay         FeatureReq = "ReqSetOverlay"         // bool
-	ReqToggleOverlay      FeatureReq = "ReqToggleOverlay"      // none
-	ReqSetScale           FeatureReq = "ReqSetScale"           // float
-	ReqIncScale           FeatureReq = "ReqIncScale"           // none
-	ReqDecScale           FeatureReq = "ReqDecScale"           // none
-	ReqAddDebugger        FeatureReq = "ReqAddDebugger"        // *debugger.Debugger
-	ReqAddVCS             FeatureReq = "ReqAddVCS"             // *hardware.VCS
-	ReqAddDisasm          FeatureReq = "ReqAddDisasm"          // *disassembly.Disassembly
+	// visibility can be interpreted by the gui implementation in different
+	// ways. at it's simplest it should set the visibility of the TV screen.
+	ReqSetVisibility    FeatureReq = "ReqSetVisibility"    // bool
+	ReqToggleVisibility FeatureReq = "ReqToggleVisibility" // none
+
+	// notify GUI of emulation state. the GUI should use this to alter how
+	// infomration, particularly the display of the PixelRenderer.
+	ReqState FeatureReq = "ReqState" // EmulationState
+
+	// the following requests should set or toggle visual elements of the debugger.
+	ReqSetDbgColors    FeatureReq = "ReqSetDbgColors"    // bool
+	ReqToggleDbgColors FeatureReq = "ReqToggleDbgColors" // none
+	ReqSetCropping     FeatureReq = "ReqSetCropping"     // bool
+	ReqToggleCropping  FeatureReq = "ReqToggleCropping"  // none
+	ReqSetOverlay      FeatureReq = "ReqSetOverlay"      // bool
+	ReqToggleOverlay   FeatureReq = "ReqToggleOverlay"   // none
+	ReqCRTeffects      FeatureReq = "ReqCRTeffects"      // bool
+	ReqSetScale        FeatureReq = "ReqSetScale"        // float
+	ReqIncScale        FeatureReq = "ReqIncScale"        // none
+	ReqDecScale        FeatureReq = "ReqDecScale"        // none
+
+	// the add VCS request is used to associate the gui with an emulated VCS.
+	// a debugger does not need to send this request if it already sends a
+	// ReqAddDebugger request (which it should).
+	ReqAddVCS FeatureReq = "ReqAddVCS" // *hardware.VCS
+
+	// the add debugger request must be made by the debugger if debug access to
+	// the the machine is required by the GUI.
+	ReqAddDebugger FeatureReq = "ReqAddDebugger" // *debugger.Debugger
 
 	// the event channel is used to by the GUI implementation to send
 	// information back to the main program. the GUI may or may not be in its
 	// own go routine but regardless, the event channel is used for this
 	// purpose.
 	ReqSetEventChan FeatureReq = "ReqSetEventChan" // chan gui.Event()
+
+	// playmode is called whenever the play/debugger looper is changed. like
+	// all other requests this may not do anything, depending on the GUI
+	// specifics.
+	ReqSetPlaymode FeatureReq = "ReqSetPlaymode" // bool
+
+	// trigger a save preferences event. usually performed before gui is
+	// destroyed or before some other destructive action.
+	ReqSavePrefs FeatureReq = "ReqSavePrefs" // none
+
+	// triggered when cartridge is being change.
+	ReqChangingCartridge FeatureReq = "ReqChangingCartridge" // bool
+
+	// special request for PlusROM cartridges.
+	ReqPlusROMFirstInstallation FeatureReq = "ReqPlusROMFirstInstallation" // PlusROMFirstInstallation
 )
+
+// PlusROMFirstInstallation is used to pass information to the GUI as part of
+// the request.
+type PlusROMFirstInstallation struct {
+	Finish chan error
+	Cart   *plusrom.PlusROM
+}

@@ -12,57 +12,55 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package instructions
 
 import "fmt"
 
-// AddressingMode describes the method data for the instruction should be received
+// AddressingMode describes the method data for the instruction should be received.
 type AddressingMode int
 
-// List of supported addressing modes
+// List of supported addressing modes.
 const (
 	Implied AddressingMode = iota
 	Immediate
 	Relative // relative addressing is used for branch instructions
 
-	Absolute // sometimes called absolute addressing
-	ZeroPage
-	Indirect // indirect addressing (with no indexing) is only for JMP instructions
+	Absolute // abs
+	ZeroPage // zpg
+	Indirect // ind
 
-	PreIndexedIndirect  // uses X register
-	PostIndexedIndirect // uses Y register
-	AbsoluteIndexedX
-	AbsoluteIndexedY
-	IndexedZeroPageX
-	IndexedZeroPageY // only used for LDX
+	IndexedIndirect // (ind,X)
+	IndirectIndexed // (ind), Y
+
+	AbsoluteIndexedX // abs,X
+	AbsoluteIndexedY // abs,Y
+
+	ZeroPageIndexedX // zpg,X
+	ZeroPageIndexedY // zpg,Y
 )
 
-// EffectCategory categorises an instruction by the effect it has
+// EffectCategory categorises an instruction by the effect it has.
 type EffectCategory int
 
-// List of effect categories
+// List of effect categories.
 const (
 	Read EffectCategory = iota
 	Write
 	RMW
 
 	// the following three effects have a variable effect on the program
-	// counter, depending on the instruction's precise operand
+	// counter, depending on the instruction's precise operand.
 
 	// flow consists of the Branch and JMP instructions. Branch instructions
-	// specifically can be distinguished by the AddressingMode
+	// specifically can be distinguished by the AddressingMode.
 	Flow
 
 	Subroutine
 	Interrupt
 )
 
-// Definition defines each instruction in the instruction set; one per instruction
+// Definition defines each instruction in the instruction set; one per instruction.
 type Definition struct {
 	OpCode         uint8
 	Mnemonic       string
@@ -81,7 +79,7 @@ func (defn Definition) String() string {
 	return fmt.Sprintf("%02x %s +%dbytes (%d cycles) [mode=%d pagesens=%t effect=%d]", defn.OpCode, defn.Mnemonic, defn.Bytes, defn.Cycles, defn.AddressingMode, defn.PageSensitive, defn.Effect)
 }
 
-// IsBranch returns true if instruction is a branch instruction
+// IsBranch returns true if instruction is a branch instruction.
 func (defn Definition) IsBranch() bool {
 	return defn.AddressingMode == Relative && defn.Effect == Flow
 }

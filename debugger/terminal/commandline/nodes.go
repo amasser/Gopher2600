@@ -12,10 +12,6 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package commandline
 
@@ -26,13 +22,25 @@ import (
 
 type nodeType int
 
+func (t nodeType) String() string {
+	switch t {
+	case nodeRoot:
+		return "nodeRoot"
+	case nodeRequired:
+		return "nodeRequired"
+	case nodeOptional:
+		return "nodeOptional"
+	}
+	panic("unknown nodeType")
+}
+
 const (
 	nodeRoot nodeType = iota + 1
 	nodeRequired
 	nodeOptional
 )
 
-// nodes are chained together throught the next and branch arrays.
+// nodes are chained together thought the next and branch arrays.
 type node struct {
 	// tag should be non-empty - except in the case of some nested groups
 	tag string
@@ -54,40 +62,18 @@ type node struct {
 // Use this only for testing/validation purposes. HelpString() is more useful
 // to the end user.
 func (n node) String() string {
-	return n.outerString(false)
+	return n.string(false, false)
 }
 
 // HelpString returns the string representation of the node (and it's children)
 // without extraneous placeholder directives (if placeholderLabel is available)
 //
-// So called because it's better to use when displaying help
+// So called because it's better to use when displaying help.
 func (n node) usageString() string {
-	return n.outerString(true)
+	return n.string(true, false)
 }
 
-func (n node) outerString(preferLabels bool) string {
-	s := strings.Builder{}
-
-	if n.repeatStart {
-		s.WriteString("{")
-	} else if n.typ == nodeOptional {
-		s.WriteString("(")
-		defer func() {
-			s.WriteString(")")
-		}()
-	}
-	if n.typ == nodeRequired {
-		s.WriteString("[")
-		defer func() {
-			s.WriteString("]")
-		}()
-	}
-
-	s.WriteString(n.innerString(preferLabels))
-	return s.String()
-}
-
-// innerString() outputs the node, and any children, as best as it can. when called
+// string() outputs the node, and any children, as best as it can. when called
 // upon the first node in a command it has the effect of recreating the
 // original input to each template entry parsed by ParseCommandTemplate()
 //
@@ -105,16 +91,15 @@ func (n node) outerString(preferLabels bool) string {
 //
 //		TEST [1 2 3 4 5]
 //
-// note: innerString should not be called directly except as a recursive call
-// or as an initial call from String()
-//
-func (n node) innerString(preferLabels bool) string {
+// note: string should not be called directly except as a recursive call
+// or as an initial call from String() and usageString().
+func (n node) string(useLabels bool, fromBranch bool) string {
 	s := strings.Builder{}
 
 	if n.isPlaceholder() && n.placeholderLabel != "" {
 		// placeholder labels come without angle brackets
 		label := fmt.Sprintf("<%s>", n.placeholderLabel)
-		if preferLabels {
+		if useLabels {
 			s.WriteString(label)
 		} else {
 			s.WriteString(fmt.Sprintf("%%%s%c", label, n.tag[1]))
@@ -126,8 +111,21 @@ func (n node) innerString(preferLabels bool) string {
 	if n.next != nil {
 		for i := range n.next {
 			prefix := " "
+
+			// this is a bit of a special condition to catch the case of an
+			// optional group followed by a required node. there may be a more
+			// general case
+			if n.typ == nodeOptional && n.tag == "" && !n.repeatStart && !fromBranch {
+				if i == 0 && n.next[i].typ == nodeRequired {
+					s.WriteString(prefix)
+					s.WriteString("(")
+					prefix = ""
+				}
+			}
+
 			if n.next[i].repeatStart {
-				s.WriteString(" {")
+				s.WriteString(prefix)
+				s.WriteString("{")
 				prefix = ""
 			}
 
@@ -145,7 +143,7 @@ func (n node) innerString(preferLabels bool) string {
 				s.WriteString(prefix)
 			}
 
-			s.WriteString(n.next[i].innerString(preferLabels))
+			s.WriteString(n.next[i].string(useLabels, false))
 
 			if n.next[i].typ == nodeRequired && (n.typ != nodeRequired || n.next[i].branch != nil) {
 				s.WriteString("]")
@@ -155,13 +153,12 @@ func (n node) innerString(preferLabels bool) string {
 					s.WriteString(")")
 				}
 			}
-
 		}
 	}
 
 	if n.branch != nil {
 		for i := range n.branch {
-			s.WriteString(fmt.Sprintf("|%s", n.branch[i].innerString(preferLabels)))
+			s.WriteString(fmt.Sprintf("|%s", n.branch[i].string(useLabels, true)))
 		}
 	}
 
@@ -172,11 +169,17 @@ func (n node) innerString(preferLabels bool) string {
 		s.WriteString("}")
 	}
 
+	// close an optional group that was opened because of a special condition
+	// (described above)
+	if n.typ == nodeOptional && n.tag == "" && !n.repeatStart && !fromBranch {
+		s.WriteString(")")
+	}
+
 	return strings.TrimSpace(s.String())
 }
 
 // nodeVerbose returns a readable representation of the node, listing branches
-// if necessary
+// if necessary.
 func (n node) nodeVerbose() string {
 	s := strings.Builder{}
 	s.WriteString(n.tagVerbose())
@@ -190,7 +193,7 @@ func (n node) nodeVerbose() string {
 }
 
 // tagVerbose returns a readable versions of the tag field, using labels if
-// possible
+// possible.
 func (n node) tagVerbose() string {
 	if n.isPlaceholder() {
 		if n.placeholderLabel != "" {
@@ -214,7 +217,7 @@ func (n node) tagVerbose() string {
 }
 
 // isPlaceholder checks tag to see if it is a placeholder. does not check to
-// see if placeholder is valid
+// see if placeholder is valid.
 func (n node) isPlaceholder() bool {
 	return len(n.tag) == 2 && n.tag[0] == '%'
 }

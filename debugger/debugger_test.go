@@ -12,16 +12,11 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package debugger_test
 
 import (
 	"fmt"
-	"io"
 	"testing"
 	"time"
 
@@ -29,84 +24,21 @@ import (
 	"github.com/jetsetilly/gopher2600/debugger"
 	"github.com/jetsetilly/gopher2600/debugger/terminal"
 	"github.com/jetsetilly/gopher2600/gui"
-	"github.com/jetsetilly/gopher2600/television"
+	"github.com/jetsetilly/gopher2600/hardware/television"
+	"github.com/jetsetilly/gopher2600/prefs"
 )
 
-type mockTV struct{}
 type mockGUI struct{}
 
-func (t *mockTV) String() string {
-	return ""
-}
-
-func (t *mockTV) Reset() error {
+func (g *mockGUI) SetFeature(request gui.FeatureReq, args ...gui.FeatureReqData) error {
 	return nil
 }
 
-func (t *mockTV) AddPixelRenderer(_ television.PixelRenderer) {
+func (g *mockGUI) SetFeatureNoError(request gui.FeatureReq, args ...gui.FeatureReqData) {
 }
 
-func (t *mockTV) AddAudioMixer(_ television.AudioMixer) {
-}
-
-func (t *mockTV) Signal(_ television.SignalAttributes) error {
-	return nil
-}
-
-func (t *mockTV) GetState(_ television.StateReq) (int, error) {
-	return 0, nil
-}
-
-func (t *mockTV) SetSpec(_ string) error {
-	return nil
-}
-
-func (t *mockTV) GetSpec() *television.Specification {
-	return television.SpecNTSC
-}
-
-func (t *mockTV) IsStable() bool {
-	return true
-}
-
-func (t *mockTV) End() error {
-	return nil
-}
-
-func (t *mockTV) SpecIDOnCreation() string {
-	return ""
-}
-
-func (t *mockTV) SetFPSCap(set bool) {
-}
-
-func (t *mockTV) SetFPS(fps float32) {
-}
-
-func (t *mockTV) GetReqFPS() float32 {
-	return 0.0
-}
-
-func (t *mockTV) GetActualFPS() float32 {
-	return 0.0
-}
-
-func (t *mockTV) GetLastSignal() television.SignalAttributes {
-	return television.SignalAttributes{}
-}
-
-func (g *mockGUI) Destroy(_ io.Writer) {
-}
-
-func (g *mockGUI) IsVisible() bool {
-	return false
-}
-
-func (g *mockGUI) SetFeature(request gui.FeatureReq, args ...interface{}) error {
-	return nil
-}
-
-func (g *mockGUI) Service() {
+func (g *mockGUI) GetFeature(request gui.FeatureReq) (gui.FeatureReqData, error) {
+	return nil, nil
 }
 
 type mockTerm struct {
@@ -140,7 +72,7 @@ func (trm *mockTerm) Silence(silenced bool) {
 
 func (trm *mockTerm) TermRead(buffer []byte, _ terminal.Prompt, _ *terminal.ReadEvents) (int, error) {
 	s := <-trm.inp
-	copy(buffer, []byte(s))
+	copy(buffer, s)
 	return len(s) + 1, nil
 }
 
@@ -153,7 +85,7 @@ func (trm *mockTerm) IsInteractive() bool {
 }
 
 func (trm *mockTerm) TermPrintLine(sty terminal.Style, s string) {
-	if sty == terminal.StyleInput {
+	if sty == terminal.StyleEcho {
 		return
 	}
 
@@ -180,35 +112,27 @@ func (trm *mockTerm) rcvOutput() {
 	}
 }
 
-func (trm *mockTerm) prtOutput() {
-	trm.rcvOutput()
-	for i := range trm.output {
-		fmt.Println(trm.output[i])
-	}
-}
-
 // cmpOutput compares the string argument with the *last line* of the most
 // recent output. it can easily be adapted to compare the whole output if
 // necessary.
-func (trm *mockTerm) cmpOutput(s string) bool {
+func (trm *mockTerm) cmpOutput(s string) {
 	trm.rcvOutput()
 
 	if len(trm.output) == 0 {
 		if len(s) != 0 {
 			trm.t.Errorf(fmt.Sprintf("unexpected debugger output (nothing) should be (%s)", s))
-			return false
+			return
 		}
-		return true
+		return
 	}
 
 	l := len(trm.output) - 1
 
 	if trm.output[l] == s {
-		return true
+		return
 	}
 
 	trm.t.Errorf(fmt.Sprintf("unexpected debugger output (%s) should be (%s)", trm.output[l], s))
-	return false
 }
 
 func (trm *mockTerm) testSequence() {
@@ -219,25 +143,38 @@ func (trm *mockTerm) testSequence() {
 }
 
 func TestDebugger_withNonExistantInitScript(t *testing.T) {
+	prefs.DisableSaving = true
+
 	trm := newMockTerm(t)
 
-	dbg, err := debugger.NewDebugger(&mockTV{}, &mockGUI{}, trm)
+	tv, err := television.NewTelevision("NTSC")
+	if err != nil {
+		t.Fatalf(err.Error())
+	}
+
+	dbg, err := debugger.NewDebugger(tv, &mockGUI{}, trm, false)
 	if err != nil {
 		t.Fatalf(err.Error())
 	}
 
 	go trm.testSequence()
 
-	err = dbg.Start("non_existant_script", cartridgeloader.Loader{})
+	err = dbg.Start("non_existent_script", cartridgeloader.Loader{})
 	if err != nil {
 		t.Fatalf(err.Error())
 	}
 }
 
 func TestDebugger(t *testing.T) {
-	trm := newMockTerm(t)
+	prefs.DisableSaving = true
 
-	dbg, err := debugger.NewDebugger(&mockTV{}, &mockGUI{}, trm)
+	trm := newMockTerm(t)
+	tv, err := television.NewTelevision("NTSC")
+	if err != nil {
+		t.Fatalf(err.Error())
+	}
+
+	dbg, err := debugger.NewDebugger(tv, &mockGUI{}, trm, false)
 	if err != nil {
 		t.Fatalf(err.Error())
 	}

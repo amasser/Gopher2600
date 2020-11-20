@@ -12,10 +12,6 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package video
 
@@ -23,14 +19,15 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/jetsetilly/gopher2600/hardware/tia/future"
+	"github.com/jetsetilly/gopher2600/hardware/television/signal"
+	"github.com/jetsetilly/gopher2600/hardware/television/specification"
+	"github.com/jetsetilly/gopher2600/hardware/tia/delay"
 	"github.com/jetsetilly/gopher2600/hardware/tia/phaseclock"
 	"github.com/jetsetilly/gopher2600/hardware/tia/polycounter"
-	"github.com/jetsetilly/gopher2600/television"
 )
 
 // PlayerSizes maps player size and copies values to descriptions of those
-// values
+// values.
 var PlayerSizes = []string{
 	"one copy",
 	"two copies [close]",
@@ -43,7 +40,7 @@ var PlayerSizes = []string{
 }
 
 // playerSizesBrief maps player size and copies values to brief descriptions of
-// those values
+// those values.
 var playerSizesBrief = []string{
 	"",
 	"2 [close]",
@@ -55,18 +52,12 @@ var playerSizesBrief = []string{
 	"quad",
 }
 
-type playerSprite struct {
+// PlayerSprite represents a moveable player sprite in the VCS graphical display.
+// The VCS has two player sprites.
+type PlayerSprite struct {
 	// we need a reference to the attached television so that we can note the
 	// reset position of the sprite
-	//
-	// should we rely on the television implementation to report this
-	// information? I think so. the purpose of noting the reset position at all
-	// is so that we can debug (both the emulator and any games we're
-	// developing) more easily. if we calculate the reset position another way,
-	// using only information from the TIA, there's a risk that the debugging
-	// information from the TV and from the sprite will differ - to the point
-	// of confusion.
-	tv television.Television
+	tv signal.TelevisionSprite
 
 	// references to some fundamental TIA properties. various combinations of
 	// these affect the latching delay when resetting the sprite
@@ -78,17 +69,10 @@ type playerSprite struct {
 	// position of the sprite as a polycounter value - the basic principle
 	// behind VCS sprites is to begin drawing the sprite when position
 	// circulates to zero
-	position *polycounter.Polycounter
+	position polycounter.Polycounter
 
 	// "Beside each counter there is a two-phase clock generator..."
 	pclk phaseclock.PhaseClock
-
-	// each sprite keeps track of its own delays. this way, we can carefully
-	// control when the sprite events occur - taking into consideration sprite
-	// specific conditions
-	//
-	// note that setGfxData() uses the TIA wide future instance
-	Delay *future.Ticker
 
 	// horizontal movement
 	MoreHMOVE bool
@@ -121,17 +105,25 @@ type playerSprite struct {
 	Color         uint8 // equal to missile color
 	Reflected     bool
 	VerticalDelay bool
-	GfxDataNew    uint8
-	GfxDataOld    uint8
 
-	// pointer to which gfx data we're using (gfxDataOld or gfxDataNew).
-	// controlled by value of verticalDelay
-	gfxData *uint8
+	// which gfx register we use depends on the value of vertical delay
+	GfxDataNew uint8
+	GfxDataOld uint8
+	gfxData    *uint8
 
 	// for convenience we store the raw NUSIZ value and the significant size
 	// and copy bits
 	Nusiz         uint8 // the raw value from the NUSIZ register
 	SizeAndCopies uint8 // just the three left-most bits
+
+	// position reset and enclockifier start events are both delayed by a small
+	// number of cycles
+	futureReset delay.Event
+	futureStart delay.Event
+
+	// unique to the player sprite, setting of the nusiz value is also delayed
+	// under certain conditions
+	futureSetNUSIZ delay.Event
 
 	// ScanCounter implements the "graphics scan counter" as described in
 	// TIA_HW_Notes.txt:
@@ -141,31 +133,13 @@ type playerSprite struct {
 	// of the player is currently being drawn by generating a 3-bit
 	// source pixel address. These are the only binary ripple counters
 	// in the TIA."
-	ScanCounter scanCounter
-
-	// we need access to the other player sprite. when we write new gfxData, it
-	// triggers the other player's gfxDataPrev value to equal the existing
-	// gfxData of this player.
 	//
-	// this wasn't clear to me originally but was crystal clear after reading
-	// Erik Mooney's post, "48-pixel highres routine explained!"
-	otherPlayer *playerSprite
-
-	// reference to ball sprite. only required by player1 sprite. see
-	// setGfxData() function below
-	ball *ballSprite
-
-	// a record of the delayed start drawing event. resets to nil once drawing
-	// commences
-	StartDrawingEvent *future.Event
-
-	// a record of the delayed reset event. resets to nil once reset has
-	// occurred
-	ResetPositionEvent *future.Event
+	// equivalent to the Enclockifier used by the ball and missile sprites
+	ScanCounter scanCounter
 }
 
-func newPlayerSprite(label string, tv television.Television, hblank, hmoveLatch *bool) (*playerSprite, error) {
-	ps := playerSprite{
+func newPlayerSprite(label string, tv signal.TelevisionSprite, hblank *bool, hmoveLatch *bool) *PlayerSprite {
+	ps := &PlayerSprite{
 		label:      label,
 		tv:         tv,
 		hblank:     hblank,
@@ -173,31 +147,40 @@ func newPlayerSprite(label string, tv television.Television, hblank, hmoveLatch 
 	}
 	ps.ScanCounter.Pixel = -1
 
-	var err error
-
-	ps.position, err = polycounter.New(6)
-	if err != nil {
-		return nil, err
-	}
-
-	ps.Delay = future.NewTicker(label)
-
 	ps.ScanCounter.sizeAndCopies = &ps.SizeAndCopies
 	ps.ScanCounter.pclk = &ps.pclk
-	ps.position.Reset()
-
-	// initialise gfxData pointer
 	ps.gfxData = &ps.GfxDataNew
 
-	return &ps, nil
+	ps.position.Reset()
+
+	return ps
 }
 
-// Label returns the label for the sprite
-func (ps playerSprite) Label() string {
+// Snapshot creates a copy of the player sprite in its current state.
+func (ps *PlayerSprite) Snapshot() *PlayerSprite {
+	n := *ps
+	return &n
+}
+
+func (ps *PlayerSprite) Plumb(hblank *bool, hmoveLatch *bool) {
+	ps.hblank = hblank
+	ps.hmoveLatch = hmoveLatch
+	ps.ScanCounter.sizeAndCopies = &ps.SizeAndCopies
+	ps.ScanCounter.pclk = &ps.pclk
+
+	if ps.VerticalDelay {
+		ps.gfxData = &ps.GfxDataOld
+	} else {
+		ps.gfxData = &ps.GfxDataNew
+	}
+}
+
+// Label returns the label for the sprite.
+func (ps PlayerSprite) Label() string {
 	return ps.label
 }
 
-func (ps playerSprite) String() string {
+func (ps PlayerSprite) String() string {
 	// the hmove value as maintained by the sprite type is normalised for
 	// for purposes of presentation
 	normalisedHmove := int(ps.Hmove) - 8
@@ -257,7 +240,6 @@ func (ps playerSprite) String() string {
 
 		s.WriteString(")")
 		notes = true
-
 	} else if ps.ScanCounter.IsLatching() {
 		if notes {
 			s.WriteString(",")
@@ -269,7 +251,6 @@ func (ps playerSprite) String() string {
 	// value
 	if (ps.ScanCounter.IsActive() || ps.ScanCounter.IsLatching()) &&
 		ps.SizeAndCopies != 0x0 && ps.SizeAndCopies != 0x5 && ps.SizeAndCopies != 0x07 {
-
 		switch ps.ScanCounter.Cpy {
 		case 0:
 		case 1:
@@ -300,19 +281,19 @@ func (ps playerSprite) String() string {
 	return s.String()
 }
 
-func (ps *playerSprite) rsync(adjustment int) {
+func (ps *PlayerSprite) rsync(adjustment int) {
 	ps.ResetPixel -= adjustment
 	ps.HmovedPixel -= adjustment
 	if ps.ResetPixel < 0 {
-		ps.ResetPixel += television.HorizClksVisible
+		ps.ResetPixel += specification.HorizClksVisible
 	}
 	if ps.HmovedPixel < 0 {
-		ps.HmovedPixel += television.HorizClksVisible
+		ps.HmovedPixel += specification.HorizClksVisible
 	}
 }
 
 // tick moves the sprite counters along (both position and graphics scan).
-func (ps *playerSprite) tick(visible, isHmove bool, hmoveCt uint8) {
+func (ps *PlayerSprite) tick(visible, isHmove bool, hmoveCt uint8) bool {
 	// check to see if there is more movement required for this sprite
 	if isHmove {
 		ps.MoreHMOVE = ps.MoreHMOVE && compareHMOVE(hmoveCt, ps.Hmove)
@@ -322,7 +303,7 @@ func (ps *playerSprite) tick(visible, isHmove bool, hmoveCt uint8) {
 
 	// early return if nothing to do
 	if !(isHmove && ps.MoreHMOVE) && !visible {
-		return
+		return false
 	}
 
 	// update hmoved pixel value
@@ -331,7 +312,7 @@ func (ps *playerSprite) tick(visible, isHmove bool, hmoveCt uint8) {
 
 		// adjust for screen boundary
 		if ps.HmovedPixel < 0 {
-			ps.HmovedPixel += television.HorizClksVisible
+			ps.HmovedPixel += specification.HorizClksVisible
 		}
 	}
 
@@ -367,7 +348,7 @@ func (ps *playerSprite) tick(visible, isHmove bool, hmoveCt uint8) {
 		//
 		// rules discovered through observation (games that do bad things
 		// to HMOVE)
-		if ps.ResetPositionEvent == nil || ps.ResetPositionEvent.JustStarted() {
+		if !ps.futureReset.IsActive() || ps.futureReset.JustStarted() {
 			// startDrawingEvent is delayed by 5 ticks. from TIA_HW_Notes.txt:
 			//
 			// "Each START decode is delayed by 4 CLK in decoding, plus a
@@ -385,7 +366,7 @@ func (ps *playerSprite) tick(visible, isHmove bool, hmoveCt uint8) {
 			switch ps.position.Count() {
 			case 3:
 				if ps.SizeAndCopies == 0x01 || ps.SizeAndCopies == 0x03 {
-					ps.StartDrawingEvent = ps.Delay.ScheduleWithArg(4, ps._futureStartDrawingEvent, 1, "START")
+					ps.futureStart.Schedule(4, 1)
 				}
 			case 7:
 				if ps.SizeAndCopies == 0x03 || ps.SizeAndCopies == 0x02 || ps.SizeAndCopies == 0x06 {
@@ -393,7 +374,7 @@ func (ps *playerSprite) tick(visible, isHmove bool, hmoveCt uint8) {
 					if ps.SizeAndCopies == 0x03 {
 						cpy = 2
 					}
-					ps.StartDrawingEvent = ps.Delay.ScheduleWithArg(4, ps._futureStartDrawingEvent, cpy, "START")
+					ps.futureStart.Schedule(4, uint8(cpy))
 				}
 			case 15:
 				if ps.SizeAndCopies == 0x04 || ps.SizeAndCopies == 0x06 {
@@ -401,10 +382,10 @@ func (ps *playerSprite) tick(visible, isHmove bool, hmoveCt uint8) {
 					if ps.SizeAndCopies == 0x06 {
 						cpy = 2
 					}
-					ps.StartDrawingEvent = ps.Delay.ScheduleWithArg(4, ps._futureStartDrawingEvent, cpy, "START")
+					ps.futureStart.Schedule(4, uint8(cpy))
 				}
 			case 39:
-				ps.StartDrawingEvent = ps.Delay.ScheduleWithArg(4, ps._futureStartDrawingEvent, 0, "START")
+				ps.futureStart.Schedule(4, 0)
 
 			case 40:
 				ps.position.Reset()
@@ -412,11 +393,21 @@ func (ps *playerSprite) tick(visible, isHmove bool, hmoveCt uint8) {
 		}
 	}
 
-	// tick future events that are goverened by the sprite
-	ps.Delay.Tick()
+	// tick delayed events
+	if v, ok := ps.futureSetNUSIZ.Tick(); ok {
+		ps._futureSetNUSIZ(v)
+	}
+	if _, ok := ps.futureReset.Tick(); ok {
+		ps._futureResetPosition()
+	}
+	if v, ok := ps.futureStart.Tick(); ok {
+		ps._futureStartDrawingEvent(v)
+	}
+
+	return true
 }
 
-func (ps *playerSprite) _futureStartDrawingEvent(v interface{}) {
+func (ps *PlayerSprite) _futureStartDrawingEvent(v uint8) {
 	// it is useful for debugging to know which copy of the sprite is
 	// currently being drawn. we'll update this value in the switch
 	// below, taking great care to note the value of ms.copies at each
@@ -424,13 +415,11 @@ func (ps *playerSprite) _futureStartDrawingEvent(v interface{}) {
 	//
 	// this is used by the missile sprites when in reset-to-player
 	// mode
-	ps.ScanCounter.Cpy = v.(int)
-
+	ps.ScanCounter.Cpy = int(v)
 	ps.ScanCounter.start()
-	ps.StartDrawingEvent = nil
 }
 
-func (ps *playerSprite) prepareForHMOVE() {
+func (ps *PlayerSprite) prepareForHMOVE() {
 	// the latching delay should already have been consumed when servicing the
 	// HMOVE signal in tia.go
 
@@ -443,13 +432,13 @@ func (ps *playerSprite) prepareForHMOVE() {
 		ps.HmovedPixel += 8
 
 		// adjust for screen boundary
-		if ps.HmovedPixel > television.HorizClksVisible {
-			ps.HmovedPixel -= television.HorizClksVisible
+		if ps.HmovedPixel > specification.HorizClksVisible {
+			ps.HmovedPixel -= specification.HorizClksVisible
 		}
 	}
 }
 
-func (ps *playerSprite) resetPosition() {
+func (ps *PlayerSprite) resetPosition() {
 	// delay of 5 clocks using. from TIA_HW_Notes.txt:
 	//
 	// "This arrangement means that resetting the player counter on any
@@ -485,26 +474,26 @@ func (ps *playerSprite) resetPosition() {
 	//
 	// rules discovered through observation (games that do bad things
 	// to HMOVE)
-	if ps.StartDrawingEvent != nil && !ps.StartDrawingEvent.AboutToEnd() {
-		ps.StartDrawingEvent.Pause()
+	if !ps.futureStart.AboutToEnd() {
+		ps.futureStart.Pause()
 	}
 
 	// stop any existing reset events. generally, this codepath will not apply
 	// because a resetPositionEvent will conculde before being triggered again.
 	// but it is possible when using a very quick instruction on the reset register,
 	// like a zero page INC, for requests to overlap
-	if ps.ResetPositionEvent != nil {
-		ps.ResetPositionEvent.Push()
+	if ps.futureReset.IsActive() {
+		ps.futureReset.Push()
 		return
 	}
 
-	ps.ResetPositionEvent = ps.Delay.Schedule(delay, ps._futureResetPosition, "RESPx")
+	ps.futureReset.Schedule(delay, 0)
 }
 
-func (ps *playerSprite) _futureResetPosition() {
+func (ps *PlayerSprite) _futureResetPosition() {
 	// the pixel at which the sprite has been reset, in relation to the
 	// left edge of the screen
-	ps.ResetPixel, _ = ps.tv.GetState(television.ReqHorizPos)
+	ps.ResetPixel = ps.tv.GetState(signal.ReqHorizPos)
 
 	if ps.ResetPixel >= 0 {
 		// resetPixel adjusted by +1 because the tv is not yet in the correct.
@@ -521,8 +510,8 @@ func (ps *playerSprite) _futureResetPosition() {
 		}
 
 		// adjust resetPixel for screen boundaries
-		if ps.ResetPixel > television.HorizClksVisible {
-			ps.ResetPixel -= television.HorizClksVisible
+		if ps.ResetPixel > specification.HorizClksVisible {
+			ps.ResetPixel -= specification.HorizClksVisible
 		}
 
 		// by definition the current pixel is the same as the reset pixel at
@@ -549,21 +538,17 @@ func (ps *playerSprite) _futureResetPosition() {
 	//
 	// rules discovered through observation (games that do bad things
 	// to HMOVE)
-	if ps.StartDrawingEvent != nil {
-		if !ps.StartDrawingEvent.JustStarted() {
-			ps.StartDrawingEvent.Force()
-			ps.StartDrawingEvent = nil
+	if ps.futureStart.IsActive() {
+		if !ps.futureStart.JustStarted() {
+			v := ps.futureStart.Force()
+			ps._futureStartDrawingEvent(v)
 		} else {
-			ps.StartDrawingEvent.Drop()
-			ps.StartDrawingEvent = nil
+			ps.futureStart.Drop()
 		}
 	}
-
-	// dump reference to reset event
-	ps.ResetPositionEvent = nil
 }
 
-func (ps *playerSprite) pixel() (active bool, color uint8, collision bool) {
+func (ps *PlayerSprite) pixel() (active bool, color uint8, collision bool) {
 	// pick the pixel from the gfxData register
 	if ps.ScanCounter.IsActive() {
 		var offset int
@@ -579,33 +564,49 @@ func (ps *playerSprite) pixel() (active bool, color uint8, collision bool) {
 		}
 	}
 
+	// scancounter is not active but we still need to check what the first
+	// pixel in the scancounter is in case the the player is latching in the
+	// HBLANK period.
+	//
+	// we can see this on the 3rd screen to the left of Keystone Kapers. the
+	// ball on the second corridor will wrongly collide with the policeman
+	// unless we take into account the first pixel of the scancounter
+
+	var firstPixel bool
+	if ps.Reflected {
+		firstPixel = (*ps.gfxData>>7)&0x01 == 0x01
+	} else {
+		firstPixel = *ps.gfxData&0x01 == 0x01
+	}
+
 	// always return player color because when in "scoremode" the playfield
 	// wants to know the color of the player
-	return false, ps.Color, *ps.hblank && ps.ScanCounter.IsLatching()
+	return false, ps.Color, firstPixel && *ps.hblank && ps.ScanCounter.IsLatching()
 }
 
-func (ps *playerSprite) setGfxData(data uint8) {
-	// from TIA_HW_Notes.txt:
-	//
-	// "Writes to GRP0 always modify the "new" P0 value, and the contents of
-	// the "new" P0 are copied into "old" P0 whenever GRP1 is written.
-	// (Likewise, writes to GRP1 always modify the "new" P1 value, and the
-	// contents of the "new" P1 are copied into "old" P1 whenever GRP0 is
-	// written). It is safe to modify GRPn at any time, with immediate effect."
-	ps.otherPlayer.GfxDataOld = ps.otherPlayer.GfxDataNew
+func (ps *PlayerSprite) setGfxData(data uint8) {
 	ps.GfxDataNew = data
+}
 
-	// if player sprite is connected to the ball sprite then update the delayed
-	// output for the ball. only used by player1 sprite.
-	if ps.ball != nil {
-		ps.ball.setEnableDelay()
-	}
+// from TIA_HW_Notes.txt:
+//
+// "Writes to GRP0 always modify the "new" P0 value, and the contents of
+// the "new" P0 are copied into "old" P0 whenever GRP1 is written.
+// (Likewise, writes to GRP1 always modify the "new" P1 value, and the
+// contents of the "new" P1 are copied into "old" P1 whenever GRP0 is
+// written). It is safe to modify GRPn at any time, with immediate effect."
+//
+// the significance of this wasn't clear to me originally but was
+// crystal clear after reading Erik Mooney's post, "48-pixel highres
+// routine explained".
+func (ps *PlayerSprite) setOldGfxData() {
+	ps.GfxDataOld = ps.GfxDataNew
 }
 
 // SetVerticalDelay bit also alters which gfx registers is being used.
 // Debuggers should use this function to set the delay bit rather than setting
 // it directly.
-func (ps *playerSprite) SetVerticalDelay(vdelay bool) {
+func (ps *PlayerSprite) SetVerticalDelay(vdelay bool) {
 	// from TIA_HW_Notes.txt:
 	//
 	// "Vertical Delay bit - this is also read every time a pixel is generated
@@ -623,7 +624,7 @@ func (ps *playerSprite) SetVerticalDelay(vdelay bool) {
 	}
 }
 
-func (ps *playerSprite) setReflection(value bool) {
+func (ps *PlayerSprite) setReflection(value bool) {
 	// from TIA_HW_Notes.txt:
 	//
 	// "Player Reflect bit - this is read every time a pixel is generated,
@@ -635,8 +636,8 @@ func (ps *playerSprite) setReflection(value bool) {
 }
 
 // !!TODO: the setNUSIZ() function needs untangling. I reckon with a bit of
-// reordering we can simplify it quite a bit
-func (ps *playerSprite) setNUSIZ(value uint8) {
+// reordering we can simplify it quite a bit.
+func (ps *PlayerSprite) setNUSIZ(value uint8) {
 	// from TIA_HW_Notes.txt:
 	//
 	// "The NUSIZ register can be changed at any time in order to alter
@@ -651,15 +652,14 @@ func (ps *playerSprite) setNUSIZ(value uint8) {
 	// value of -1 (see Schedule() function notes)
 	delay := -1
 
-	if ps.StartDrawingEvent != nil {
+	if ps.futureStart.IsActive() {
 		if ps.SizeAndCopies == 0x05 || ps.SizeAndCopies == 0x07 {
 			delay = 0
-		} else if ps.StartDrawingEvent.RemainingCycles() == 0 {
+		} else if ps.futureStart.Remaining() == 0 {
 			delay = 1
-		} else if ps.StartDrawingEvent.RemainingCycles() >= 2 &&
+		} else if ps.futureStart.Remaining() >= 2 &&
 			ps.SizeAndCopies != value && ps.SizeAndCopies != 0x00 &&
 			(value == 0x05 || value == 0x07) {
-
 			// this branch applies when a sprite is changing from a single
 			// width sprite to a double/quadruple width sprite. in that
 			// instance we drop the drawing event if it has only recently
@@ -673,29 +673,32 @@ func (ps *playerSprite) setNUSIZ(value uint8) {
 			//	o properly_model_nusiz_during_player_decode_and_draw/player8.bin
 			//
 			// the rules maybe more subtle or more general than this
-			ps.StartDrawingEvent.Drop()
-			ps.StartDrawingEvent = nil
+			ps.futureStart.Drop()
 		}
 	} else if ps.ScanCounter.IsLatching() || ps.ScanCounter.IsActive() {
 		if (ps.SizeAndCopies == 0x05 || ps.SizeAndCopies == 0x07) && (value == 0x05 || value == 0x07) {
-			// minimal delay current if future/current NUSIZ is double/quadruple width
+			// minimal delay if future/current NUSIZ is double/quadruple width
 			delay = 0
 		} else {
 			delay = 1
 		}
 	}
 
-	ps.Delay.ScheduleWithArg(delay, ps._futureSetNUSIZ, value, "NUSIZx")
+	if delay >= 0 {
+		ps.futureSetNUSIZ.Schedule(delay, value)
+	} else {
+		ps.SetNUSIZ(value)
+	}
 }
 
-func (ps *playerSprite) _futureSetNUSIZ(v interface{}) {
-	ps.SetNUSIZ(v.(uint8))
+func (ps *PlayerSprite) _futureSetNUSIZ(v uint8) {
+	ps.SetNUSIZ(v)
 }
 
 // SetNUSIZ is called when the NUSIZ register changes, after a delay. It should
 // also be used to set the NUSIZ value from a debugger for immediate effect.
 // Setting the value directly will upset reset/hmove pixel information.
-func (ps *playerSprite) SetNUSIZ(value uint8) {
+func (ps *PlayerSprite) SetNUSIZ(value uint8) {
 	// if size is 2x or 4x currently then take off the additional pixel. we'll
 	// add it back on afterwards if needs be
 	if ps.SizeAndCopies == 0x05 || ps.SizeAndCopies == 0x07 {
@@ -718,24 +721,50 @@ func (ps *playerSprite) SetNUSIZ(value uint8) {
 	}
 
 	// adjust reset pixel for screen boundaries
-	if ps.ResetPixel > television.HorizClksVisible {
-		ps.ResetPixel -= television.HorizClksVisible
+	if ps.ResetPixel > specification.HorizClksVisible {
+		ps.ResetPixel -= specification.HorizClksVisible
 	}
-	if ps.HmovedPixel > television.HorizClksVisible {
-		ps.HmovedPixel -= television.HorizClksVisible
+	if ps.HmovedPixel > specification.HorizClksVisible {
+		ps.HmovedPixel -= specification.HorizClksVisible
 	}
 }
 
-func (ps *playerSprite) setColor(value uint8) {
+func (ps *PlayerSprite) setColor(value uint8) {
 	// there is nothing in TIA_HW_Notes.txt about the color registers
 	ps.Color = value
 }
 
-// setHmoveValue normalises the nibbles from the NUSIZ register
-func (ps *playerSprite) setHmoveValue(v interface{}) {
-	ps.Hmove = (v.(uint8) ^ 0x80) >> 4
+// setHmoveValue normalises the nibbles from the NUSIZ register.
+func (ps *PlayerSprite) setHmoveValue(v uint8) {
+	ps.Hmove = (v ^ 0x80) >> 4
 }
 
-func (ps *playerSprite) clearHmoveValue() {
+func (ps *PlayerSprite) clearHmoveValue() {
 	ps.Hmove = 0x08
+}
+
+// reset missile to player position. from TIA_HW_Notes.txt:
+//
+// "The Missile-to-player reset is implemented by resetting the M0 counter
+// when the P0 graphics scan counter is at %100 (in the middle of drawing
+// the player graphics) AND the main copy of P0 is being drawn (ie the
+// missile counter will not be reset when a subsequent copy is drawn, if
+// any). This second condition is generated from a latch outputting [FSTOB]
+// that is reset when the P0 counter wraps around, and set when the START
+// signal is decoded for a 'close', 'medium' or 'far' copy of P0."
+//
+// note: the FSTOB output is the primary flag in the parent player's
+// scancounter.
+func (ps *PlayerSprite) triggerMissileReset() bool {
+	if ps.ScanCounter.Cpy != 0 {
+		return false
+	}
+
+	switch *ps.ScanCounter.sizeAndCopies {
+	case 0x05:
+		return ps.ScanCounter.Pixel == 3 && ps.ScanCounter.count == 0
+	case 0x07:
+		return ps.ScanCounter.Pixel == 5 && ps.ScanCounter.count == 3
+	}
+	return ps.ScanCounter.Pixel == 2
 }

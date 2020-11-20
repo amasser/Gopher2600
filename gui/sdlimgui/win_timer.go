@@ -12,10 +12,6 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package sdlimgui
 
@@ -23,6 +19,7 @@ import (
 	"fmt"
 	"strconv"
 
+	"github.com/jetsetilly/gopher2600/gui"
 	"github.com/jetsetilly/gopher2600/hardware/riot/timer"
 
 	"github.com/inkyblackness/imgui-go/v2"
@@ -32,12 +29,11 @@ const winTimerTitle = "Timer"
 
 type winTimer struct {
 	windowManagement
+
 	img *SdlImgui
 
 	// widget dimensions
 	intervalComboDim imgui.Vec2
-	valueDim         imgui.Vec2
-	ticksDim         imgui.Vec2
 }
 
 func newWinTimer(img *SdlImgui) (managedWindow, error) {
@@ -50,8 +46,6 @@ func newWinTimer(img *SdlImgui) (managedWindow, error) {
 
 func (win *winTimer) init() {
 	win.intervalComboDim = imguiGetFrameDim("", timer.IntervalList...)
-	win.ticksDim = imguiGetFrameDim("FFFF")
-	win.valueDim = imguiGetFrameDim("FF")
 }
 
 func (win *winTimer) destroy() {
@@ -61,22 +55,21 @@ func (win *winTimer) id() string {
 	return winTimerTitle
 }
 
-// draw is called by service loop
 func (win *winTimer) draw() {
 	if !win.open {
 		return
 	}
 
-	imgui.SetNextWindowPosV(imgui.Vec2{634, 456}, imgui.ConditionFirstUseEver, imgui.Vec2{0, 0})
+	imgui.SetNextWindowPosV(imgui.Vec2{632, 514}, imgui.ConditionFirstUseEver, imgui.Vec2{0, 0})
 	imgui.BeginV(winTimerTitle, &win.open, imgui.WindowFlagsAlwaysAutoResize)
 
 	imgui.PushItemWidth(win.intervalComboDim.X)
-	if imgui.BeginComboV("##timerinterval", win.img.lazy.Timer.Divider, imgui.ComboFlagNoArrowButton) {
+	if imgui.BeginComboV("##timerinterval", win.img.lz.Timer.Divider, imgui.ComboFlagNoArrowButton) {
 		for _, s := range timer.IntervalList {
 			if imgui.Selectable(s) {
 				t := s // being careful about scope
-				win.img.lazy.Dbg.PushRawEvent(func() {
-					win.img.lazy.VCS.RIOT.Timer.SetInterval(t)
+				win.img.lz.Dbg.PushRawEvent(func() {
+					win.img.lz.Dbg.VCS.RIOT.Timer.SetInterval(t)
 				})
 			}
 		}
@@ -85,27 +78,23 @@ func (win *winTimer) draw() {
 	}
 	imgui.PopItemWidth()
 
-	value := fmt.Sprintf("%02x", win.img.lazy.Timer.INTIMvalue)
-	imgui.PushItemWidth(win.ticksDim.X)
 	imgui.SameLine()
+	value := fmt.Sprintf("%02x", win.img.lz.Timer.INTIMvalue)
 	imguiText("Value")
-	if imguiHexInput("##value", !win.img.paused, 2, &value) {
+	if imguiHexInput("##value", win.img.state != gui.StatePaused, 2, &value) {
 		if v, err := strconv.ParseUint(value, 16, 8); err == nil {
-			win.img.lazy.Dbg.PushRawEvent(func() { win.img.lazy.VCS.RIOT.Timer.SetValue(uint8(v)) })
+			win.img.lz.Dbg.PushRawEvent(func() { win.img.lz.Dbg.VCS.RIOT.Timer.SetValue(uint8(v)) })
 		}
 	}
-	imgui.PopItemWidth()
 
-	remaining := fmt.Sprintf("%04x", win.img.lazy.Timer.TicksRemaining)
-	imgui.PushItemWidth(win.ticksDim.X)
 	imgui.SameLine()
+	remaining := fmt.Sprintf("%04x", win.img.lz.Timer.TicksRemaining)
 	imguiText("Ticks")
-	if imguiHexInput("##remaining", !win.img.paused, 4, &remaining) {
+	if imguiHexInput("##remaining", win.img.state != gui.StatePaused, 4, &remaining) {
 		if v, err := strconv.ParseUint(value, 16, 16); err == nil {
-			win.img.lazy.Dbg.PushRawEvent(func() { win.img.lazy.VCS.RIOT.Timer.TicksRemaining = int(v) })
+			win.img.lz.Dbg.PushRawEvent(func() { win.img.lz.Dbg.VCS.RIOT.Timer.TicksRemaining = int(v) })
 		}
 	}
-	imgui.PopItemWidth()
 
 	imgui.End()
 }

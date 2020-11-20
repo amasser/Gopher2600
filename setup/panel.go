@@ -12,10 +12,6 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package setup
 
@@ -23,10 +19,10 @@ import (
 	"fmt"
 	"strconv"
 
+	"github.com/jetsetilly/gopher2600/curated"
 	"github.com/jetsetilly/gopher2600/database"
-	"github.com/jetsetilly/gopher2600/errors"
 	"github.com/jetsetilly/gopher2600/hardware"
-	"github.com/jetsetilly/gopher2600/hardware/riot/input"
+	"github.com/jetsetilly/gopher2600/hardware/riot/ports"
 )
 
 const panelSetupID = "panel"
@@ -40,7 +36,7 @@ const (
 	numPanelSetupFields
 )
 
-// PanelSetup is used to adjust the VCS's front panel
+// PanelSetup is used to adjust the VCS's front panel.
 type PanelSetup struct {
 	cartHash string
 
@@ -56,10 +52,10 @@ func deserialisePanelSetupEntry(fields database.SerialisedEntry) (database.Entry
 
 	// basic sanity check
 	if len(fields) > numPanelSetupFields {
-		return nil, errors.New(errors.SetupPanelError, "too many fields in panel entry")
+		return nil, curated.Errorf("panel: too many fields in panel entry")
 	}
 	if len(fields) < numPanelSetupFields {
-		return nil, errors.New(errors.SetupPanelError, "too few fields in panel entry")
+		return nil, curated.Errorf("panel: too few fields in panel entry")
 	}
 
 	var err error
@@ -67,15 +63,15 @@ func deserialisePanelSetupEntry(fields database.SerialisedEntry) (database.Entry
 	set.cartHash = fields[panelSetupFieldCartHash]
 
 	if set.p0, err = strconv.ParseBool(fields[panelSetupFieldP0]); err != nil {
-		return nil, errors.New(errors.SetupPanelError, "invalid player 0 setting")
+		return nil, curated.Errorf("panel: invalid player 0 setting")
 	}
 
 	if set.p1, err = strconv.ParseBool(fields[panelSetupFieldP1]); err != nil {
-		return nil, errors.New(errors.SetupPanelError, "invalid player 1 setting")
+		return nil, curated.Errorf("panel: invalid player 1 setting")
 	}
 
 	if set.col, err = strconv.ParseBool(fields[panelSetupFieldCol]); err != nil {
-		return nil, errors.New(errors.SetupPanelError, "invalid color setting")
+		return nil, curated.Errorf("panel: invalid color setting")
 	}
 
 	set.notes = fields[panelSetupFieldNotes]
@@ -83,17 +79,17 @@ func deserialisePanelSetupEntry(fields database.SerialisedEntry) (database.Entry
 	return set, nil
 }
 
-// ID implements the database.Entry interface
+// ID implements the database.Entry interface.
 func (set PanelSetup) ID() string {
 	return panelSetupID
 }
 
-// String implements the database.Entry interface
+// String implements the database.Entry interface.
 func (set PanelSetup) String() string {
 	return fmt.Sprintf("%s, p0=%v, p1=%v, col=%v\n", set.cartHash, set.p0, set.p1, set.col)
 }
 
-// Serialise implements the database.Entry interface
+// Serialise implements the database.Entry interface.
 func (set *PanelSetup) Serialise() (database.SerialisedEntry, error) {
 	return database.SerialisedEntry{
 			set.cartHash,
@@ -105,45 +101,45 @@ func (set *PanelSetup) Serialise() (database.SerialisedEntry, error) {
 		nil
 }
 
-// CleanUp implements the database.Entry interface
+// CleanUp implements the database.Entry interface.
 func (set PanelSetup) CleanUp() error {
 	// no cleanup necessary
 	return nil
 }
 
-// matchCartHash implements setupEntry interface
+// matchCartHash implements setupEntry interface.
 func (set PanelSetup) matchCartHash(hash string) bool {
 	return set.cartHash == hash
 }
 
-// apply implements setupEntry interface
+// apply implements setupEntry interface.
 func (set PanelSetup) apply(vcs *hardware.VCS) error {
 	if set.p0 {
-		if err := vcs.Panel.Handle(input.PanelSetPlayer0Pro, true); err != nil {
+		if err := vcs.RIOT.Ports.HandleEvent(ports.PanelID, ports.PanelSetPlayer0Pro, true); err != nil {
 			return err
 		}
 	} else {
-		if err := vcs.Panel.Handle(input.PanelSetPlayer0Pro, false); err != nil {
+		if err := vcs.RIOT.Ports.HandleEvent(ports.PanelID, ports.PanelSetPlayer0Pro, false); err != nil {
 			return err
 		}
 	}
 
 	if set.p1 {
-		if err := vcs.Panel.Handle(input.PanelSetPlayer1Pro, true); err != nil {
+		if err := vcs.RIOT.Ports.HandleEvent(ports.PanelID, ports.PanelSetPlayer1Pro, true); err != nil {
 			return err
 		}
 	} else {
-		if err := vcs.Panel.Handle(input.PanelSetPlayer1Pro, false); err != nil {
+		if err := vcs.RIOT.Ports.HandleEvent(ports.PanelID, ports.PanelSetPlayer1Pro, false); err != nil {
 			return err
 		}
 	}
 
 	if set.col {
-		if err := vcs.Panel.Handle(input.PanelSetColor, true); err != nil {
+		if err := vcs.RIOT.Ports.HandleEvent(ports.PanelID, ports.PanelSetColor, true); err != nil {
 			return err
 		}
 	} else {
-		if err := vcs.Panel.Handle(input.PanelSetColor, false); err != nil {
+		if err := vcs.RIOT.Ports.HandleEvent(ports.PanelID, ports.PanelSetColor, false); err != nil {
 			return err
 		}
 	}

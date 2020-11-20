@@ -12,10 +12,6 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package audio
 
@@ -49,7 +45,7 @@ func (au *Audio) UpdateRegisters(data bus.ChipData) bool {
 	return false
 }
 
-// changing the value of an AUDx registers causes some side effect
+// changing the value of an AUDx registers causes some side effect.
 func (ch *channel) reactAUDCx() {
 	freqClk := uint8(0)
 

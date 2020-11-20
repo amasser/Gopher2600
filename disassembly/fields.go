@@ -12,122 +12,96 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package disassembly
 
-import "fmt"
+import (
+	"fmt"
+)
 
-type widths struct {
-	location     int
-	bytecode     int
-	address      int
-	mnemonic     int
-	operand      int
-	defnCycles   int
-	defnNotes    int
-	actualCycles int
-	actualNotes  int
-}
-
-type format struct {
-	location     string
-	bytecode     string
-	address      string
-	mnemonic     string
-	operand      string
-	defnCycles   string
-	defnNotes    string
-	actualCycles string
-	actualNotes  string
-}
-
-type fields struct {
-	widths widths
-	fmt    format
-}
-
-// Update width and formatting information for entry fields
-func (fld *fields) updateWidths(d *Entry) {
-	if len(d.Location) > fld.widths.location {
-		fld.widths.location = len(d.Location)
-	}
-	if len(d.Bytecode) > fld.widths.bytecode {
-		fld.widths.bytecode = len(d.Bytecode)
-	}
-	if len(d.Address) > fld.widths.address {
-		fld.widths.address = len(d.Address)
-	}
-	if len(d.Mnemonic) > fld.widths.mnemonic {
-		fld.widths.mnemonic = len(d.Mnemonic)
-	}
-	if len(d.Operand) > fld.widths.operand {
-		fld.widths.operand = len(d.Operand)
-	}
-	if len(d.DefnCycles) > fld.widths.defnCycles {
-		fld.widths.defnCycles = len(d.DefnCycles)
-	}
-	if len(d.DefnNotes) > fld.widths.defnNotes {
-		fld.widths.defnNotes = len(d.DefnNotes)
-	}
-	if len(d.ActualCycles) > fld.widths.actualCycles {
-		fld.widths.actualCycles = len(d.ActualCycles)
-	}
-	if len(d.ActualNotes) > fld.widths.actualNotes {
-		fld.widths.actualNotes = len(d.ActualNotes)
-	}
-
-	fld.fmt.location = fmt.Sprintf("%%%ds", fld.widths.location)
-	fld.fmt.bytecode = fmt.Sprintf("%%%ds", fld.widths.bytecode)
-	fld.fmt.address = fmt.Sprintf("%%%ds", fld.widths.address)
-	fld.fmt.mnemonic = fmt.Sprintf("%%%ds", fld.widths.mnemonic)
-	fld.fmt.operand = fmt.Sprintf("%%%ds", fld.widths.operand)
-	fld.fmt.defnCycles = fmt.Sprintf("%%%ds", fld.widths.defnCycles)
-	fld.fmt.defnNotes = fmt.Sprintf("%%%ds", fld.widths.defnNotes)
-	fld.fmt.actualCycles = fmt.Sprintf("%%%ds", fld.widths.actualCycles)
-	fld.fmt.actualNotes = fmt.Sprintf("%%%ds", fld.widths.actualNotes)
-}
-
-// Field identifies which part of the disassmbly entry is of interest
+// Field identifies which part of the disassmbly entry is of interest.
 type Field int
 
-// List of valid fields
+// List of valid fields.
 const (
-	FldLocation Field = iota
+	FldLabel Field = iota
 	FldBytecode
 	FldAddress
 	FldMnemonic
 	FldOperand
 	FldDefnCycles
-	FldDefnNotes
 	FldActualCycles
 	FldActualNotes
 )
 
-// GetField returns the formatted field from the speficied Entry
-func (dsm *Disassembly) GetField(field Field, e *Entry) string {
+// required widths (in characters) of the various disassembly fields.
+const (
+	widthBytecode     = 9
+	widthAddress      = 6
+	widthMnemonic     = 3
+	widthDefnCycles   = 3
+	widthActualCycles = 1
+
+	widthNoLabel = 0
+
+	// the operand field can be numeric or symbolic. in the case of
+	// non-symbolic the following value is used.
+	widthNonSymbolicOperand = 3
+
+	// the operand field is decorated according to the addressing mode of the
+	// entry. the following value is added to the width value of both symbolic
+	// and non-symbolic operand values, to give the minimum required width.
+	widthAddressingModeDecoration = 4
+
+	// the width of the notes field is not recorded.
+)
+
+// GetField returns the formatted field from the speficied Entry.
+func (e *Entry) GetField(field Field) string {
+	var s string
+	var w int
+
 	switch field {
-	case FldLocation:
-		return fmt.Sprintf(dsm.fields.fmt.location, e.Location)
+	case FldLabel:
+		o, ok := e.Label.checkString()
+		w = widthNoLabel
+		if ok {
+			w = e.dsm.Symbols.LabelWidth()
+		}
+		return fmt.Sprintf(fmt.Sprintf("%%-%ds", w), o)
+
 	case FldBytecode:
-		return fmt.Sprintf(dsm.fields.fmt.bytecode, e.Bytecode)
+		w = widthBytecode
+		s = e.Bytecode
+
 	case FldAddress:
-		return fmt.Sprintf(dsm.fields.fmt.address, e.Address)
+		w = widthAddress
+		s = e.Address
+
 	case FldMnemonic:
-		return fmt.Sprintf(dsm.fields.fmt.mnemonic, e.Mnemonic)
+		w = widthMnemonic
+		s = e.Mnemonic
+
 	case FldOperand:
-		return fmt.Sprintf(dsm.fields.fmt.operand, e.Operand)
+		o, ok := e.Operand.checkString()
+		w = widthNonSymbolicOperand
+		if ok && e.dsm.Symbols.SymbolWidth() > w {
+			w = e.dsm.Symbols.SymbolWidth()
+		}
+		w += widthAddressingModeDecoration
+		s = o
+
 	case FldDefnCycles:
-		return fmt.Sprintf(dsm.fields.fmt.defnCycles, e.DefnCycles)
-	case FldDefnNotes:
-		return fmt.Sprintf(dsm.fields.fmt.defnNotes, e.DefnNotes)
+		w = widthDefnCycles
+		s = e.DefnCycles
+
 	case FldActualCycles:
-		return fmt.Sprintf(dsm.fields.fmt.actualCycles, e.ActualCycles)
+		w = widthActualCycles
+		s = e.Cycles
+
 	case FldActualNotes:
-		return fmt.Sprintf(dsm.fields.fmt.actualNotes, e.ActualNotes)
+		return e.ExecutionNotes
 	}
-	return ""
+
+	return fmt.Sprintf(fmt.Sprintf("%%%ds", w), s)
 }

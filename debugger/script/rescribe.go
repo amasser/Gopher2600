@@ -12,10 +12,6 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package script
 
@@ -24,13 +20,13 @@ import (
 	"os"
 	"strings"
 
+	"github.com/jetsetilly/gopher2600/curated"
 	"github.com/jetsetilly/gopher2600/debugger/terminal"
-	"github.com/jetsetilly/gopher2600/errors"
 )
 
 const commentLine = "#"
 
-// check if line is prepended with commentLine (ignoring leading spaces)
+// check if line is prepended with commentLine (ignoring leading spaces).
 func isComment(line string) bool {
 	return strings.HasPrefix(strings.TrimSpace(line), commentLine)
 }
@@ -44,20 +40,18 @@ type Rescribe struct {
 }
 
 // RescribeScript is the preferred method of initialisation for the Rescribe
-// type
+// type.
 func RescribeScript(scriptfile string) (*Rescribe, error) {
 	// open script and defer closing
 	f, err := os.Open(scriptfile)
 	if err != nil {
-		return nil, errors.New(errors.ScriptFileUnavailable, err)
+		return nil, curated.Errorf("script: file not available: %v", err)
 	}
-	defer func() {
-		_ = f.Close()
-	}()
+	defer f.Close()
 
 	buffer, err := ioutil.ReadAll(f)
 	if err != nil {
-		return nil, errors.New(errors.ScriptFileError, err)
+		return nil, curated.Errorf("script: %v", err)
 	}
 
 	scr := &Rescribe{scriptFile: scriptfile}
@@ -82,25 +76,30 @@ func RescribeScript(scriptfile string) (*Rescribe, error) {
 	return scr, nil
 }
 
-// IsInteractive implements the terminal.Input interface
+// IsInteractive implements the terminal.Input interface.
 func (scr *Rescribe) IsInteractive() bool {
 	return false
 }
 
-// TermRead implements the terminal.Input interface
+// Sentinal error returned when Rescribe.TermRead() reaches the expected end of the script.
+const (
+	ScriptEnd = "end of script (%s)"
+)
+
+// TermRead implements the terminal.Input interface.
 func (scr *Rescribe) TermRead(buffer []byte, _ terminal.Prompt, _ *terminal.ReadEvents) (int, error) {
 	if scr.lineCt > len(scr.lines)-1 {
-		return -1, errors.New(errors.ScriptEnd, scr.scriptFile)
+		return -1, curated.Errorf(ScriptEnd, scr.scriptFile)
 	}
 
 	n := len(scr.lines[scr.lineCt]) + 1
-	copy(buffer, []byte(scr.lines[scr.lineCt]))
+	copy(buffer, scr.lines[scr.lineCt])
 	scr.lineCt++
 
 	return n, nil
 }
 
-// TermReadCheck implements the terminal.Input interface
+// TermReadCheck implements the terminal.Input interface.
 func (scr *Rescribe) TermReadCheck() bool {
 	return false
 }

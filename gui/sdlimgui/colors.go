@@ -12,23 +12,20 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package sdlimgui
 
 import (
-	"github.com/jetsetilly/gopher2600/television/colors"
+	"github.com/jetsetilly/gopher2600/hardware/television/specification"
+	"github.com/jetsetilly/gopher2600/reflection"
 
 	"github.com/inkyblackness/imgui-go/v2"
 )
 
-type vec4Palette []imgui.Vec4
+// the colors in the colors package need to be converted for use with imgui.
 type packedPalette []imgui.PackedColor
 
-// imguiColors defines all the colors used by the GUI
+// imguiColors defines all the colors used by the GUI.
 type imguiColors struct {
 	// default colors
 	MenuBarBg     imgui.Vec4
@@ -37,6 +34,19 @@ type imguiColors struct {
 	TitleBgActive imgui.Vec4
 	Border        imgui.Vec4
 
+	// additional general colors
+	True        imgui.Vec4
+	False       imgui.Vec4
+	Transparent imgui.Vec4
+
+	// playscreen color
+	PlayWindowBg     imgui.Vec4
+	PlayWindowBorder imgui.Vec4
+
+	// ROM selector
+	ROMSelectDir  imgui.Vec4
+	ROMSelectFile imgui.Vec4
+
 	// the color to draw the TV Screen window border when mouse is captured
 	CapturedScreenTitle  imgui.Vec4
 	CapturedScreenBorder imgui.Vec4
@@ -44,8 +54,9 @@ type imguiColors struct {
 	// CPU status register buttons
 	CPUStatusOn  imgui.Vec4
 	CPUStatusOff imgui.Vec4
-	CPUFlgRdyOn  imgui.Vec4
-	CPUFlgRdyOff imgui.Vec4
+
+	// RAM window
+	RAMDiff imgui.Vec4
 
 	// control window buttons
 	ControlRun         imgui.Vec4
@@ -56,6 +67,7 @@ type imguiColors struct {
 	ControlHaltActive  imgui.Vec4
 
 	// disassembly entry columns
+	DisasmLocation imgui.Vec4
 	DisasmAddress  imgui.Vec4
 	DisasmByteCode imgui.Vec4
 	DisasmMnemonic imgui.Vec4
@@ -76,22 +88,33 @@ type imguiColors struct {
 	// tia window
 	IdxPointer imgui.Vec4
 
-	// terminal
-	TermBackground           imgui.Vec4
-	TermStyleInput           imgui.Vec4
-	TermStyleHelp            imgui.Vec4
-	TermStylePromptCPUStep   imgui.Vec4
-	TermStylePromptVideoStep imgui.Vec4
-	TermStylePromptConfirm   imgui.Vec4
-	TermStyleFeedback        imgui.Vec4
-	TermStyleCPUStep         imgui.Vec4
-	TermStyleVideoStep       imgui.Vec4
-	TermStyleInstrument      imgui.Vec4
-	TermStyleError           imgui.Vec4
+	// collision window
+	CollisionBit imgui.Vec4
 
-	vec4PaletteNTSC   vec4Palette
-	vec4PalettePAL    vec4Palette
-	vec4PaletteAlt    vec4Palette
+	// chip registers window
+	RegisterBit imgui.Vec4
+
+	// savekey i2c/eeprom window
+	SaveKeyBit        imgui.Vec4
+	SaveKeyOscBG      imgui.Vec4
+	SaveKeyOscSCL     imgui.Vec4
+	SaveKeyOscSDA     imgui.Vec4
+	SaveKeyBitPointer imgui.Vec4
+
+	// terminal
+	TermBackground      imgui.Vec4
+	TermStyleEcho       imgui.Vec4
+	TermStyleHelp       imgui.Vec4
+	TermStyleFeedback   imgui.Vec4
+	TermStyleCPUStep    imgui.Vec4
+	TermStyleVideoStep  imgui.Vec4
+	TermStyleInstrument imgui.Vec4
+	TermStyleError      imgui.Vec4
+	TermStyleLog        imgui.Vec4
+
+	// log
+	LogBackground imgui.Vec4
+
 	packedPaletteNTSC packedPalette
 	packedPalettePAL  packedPalette
 	packedPaletteAlt  packedPalette
@@ -106,13 +129,26 @@ func newColors() *imguiColors {
 		TitleBgActive: imgui.Vec4{0.16, 0.29, 0.48, 1.0},
 		Border:        imgui.Vec4{0.14, 0.14, 0.29, 1.0},
 
+		PlayWindowBg:     imgui.Vec4{0.0, 0.0, 0.0, 1.0},
+		PlayWindowBorder: imgui.Vec4{0.0, 0.0, 0.0, 1.0},
+
+		// additional general colors
+		True:        imgui.Vec4{0.3, 0.6, 0.3, 1.0},
+		False:       imgui.Vec4{0.6, 0.3, 0.3, 1.0},
+		Transparent: imgui.Vec4{0.0, 0.0, 0.0, 0.0},
+
+		// ROM selector
+		ROMSelectDir:  imgui.Vec4{1.0, 0.5, 0.5, 1.0},
+		ROMSelectFile: imgui.Vec4{1.0, 1.0, 1.0, 1.0},
+
 		// deferring CapturedScreenTitle & CapturedScreenBorder
 
 		// CPU status register buttons
 		CPUStatusOn:  imgui.Vec4{0.8, 0.6, 0.2, 1.0},
 		CPUStatusOff: imgui.Vec4{0.7, 0.5, 0.1, 1.0},
-		CPUFlgRdyOn:  imgui.Vec4{0.3, 0.6, 0.3, 1.0},
-		CPUFlgRdyOff: imgui.Vec4{0.6, 0.3, 0.3, 1.0},
+
+		// RAM window
+		RAMDiff: imgui.Vec4{0.3, 0.2, 0.5, 1.0},
 
 		// control window buttons
 		ControlRun:         imgui.Vec4{0.3, 0.6, 0.3, 1.0},
@@ -123,6 +159,7 @@ func newColors() *imguiColors {
 		ControlHaltActive:  imgui.Vec4{0.65, 0.3, 0.3, 1.0},
 
 		// disassembly entry columns
+		DisasmLocation: imgui.Vec4{0.8, 0.8, 0.8, 1.0},
 		DisasmAddress:  imgui.Vec4{0.8, 0.4, 0.4, 1.0},
 		DisasmByteCode: imgui.Vec4{0.6, 0.3, 0.4, 1.0},
 		DisasmMnemonic: imgui.Vec4{0.4, 0.4, 0.8, 1.0},
@@ -132,7 +169,7 @@ func newColors() *imguiColors {
 
 		// disassembly other
 		DisasmCPUstep:   imgui.Vec4{1.0, 1.0, 1.0, 0.1},
-		DisasmVideoStep: imgui.Vec4{1.0, 0.8, 0.8, 0.07},
+		DisasmVideoStep: imgui.Vec4{0.5, 0.5, 0.5, 0.07},
 		// deferring DisasmBreakAddress & DisasmBreakOther
 
 		// audio oscilloscope
@@ -142,25 +179,31 @@ func newColors() *imguiColors {
 		// tia
 		IdxPointer: imgui.Vec4{0.8, 0.8, 0.8, 1.0},
 
-		// terminal
-		TermBackground:           imgui.Vec4{0.1, 0.1, 0.2, 0.9},
-		TermStyleInput:           imgui.Vec4{0.8, 0.8, 0.8, 1.0},
-		TermStyleHelp:            imgui.Vec4{1.0, 1.0, 1.0, 1.0},
-		TermStylePromptCPUStep:   imgui.Vec4{1.0, 1.0, 1.0, 1.0},
-		TermStylePromptVideoStep: imgui.Vec4{0.8, 0.8, 0.8, 1.0},
-		TermStylePromptConfirm:   imgui.Vec4{0.1, 0.4, 0.9, 1.0},
-		TermStyleFeedback:        imgui.Vec4{1.0, 1.0, 1.0, 1.0},
-		TermStyleCPUStep:         imgui.Vec4{0.9, 0.9, 0.5, 1.0},
-		TermStyleVideoStep:       imgui.Vec4{0.7, 0.7, 0.3, 1.0},
-		TermStyleInstrument:      imgui.Vec4{0.1, 0.95, 0.9, 1.0},
-		TermStyleError:           imgui.Vec4{0.8, 0.3, 0.3, 1.0},
-	}
+		// deffering collision window CollisionBit
 
-	// we deferred setting of some colours. set them now.
-	cols.CapturedScreenTitle = cols.TitleBgActive
-	cols.CapturedScreenBorder = cols.TitleBgActive
-	cols.DisasmBreakAddress = cols.DisasmAddress
-	cols.DisasmBreakOther = cols.DisasmMnemonic
+		// deferring chip registers window RegisterBit
+
+		// deferring savekey i2c/eeprom window RegisterBit
+
+		SaveKeyOscBG:      imgui.Vec4{0.21, 0.29, 0.23, 1.0},
+		SaveKeyOscSCL:     imgui.Vec4{0.10, 0.97, 0.29, 1.0},
+		SaveKeyOscSDA:     imgui.Vec4{0.97, 0.10, 0.29, 1.0},
+		SaveKeyBitPointer: imgui.Vec4{0.8, 0.8, 0.8, 1.0},
+
+		// terminal
+		TermBackground:      imgui.Vec4{0.1, 0.1, 0.2, 0.9},
+		TermStyleEcho:       imgui.Vec4{0.8, 0.8, 0.8, 1.0},
+		TermStyleHelp:       imgui.Vec4{1.0, 1.0, 1.0, 1.0},
+		TermStyleFeedback:   imgui.Vec4{1.0, 1.0, 1.0, 1.0},
+		TermStyleCPUStep:    imgui.Vec4{0.9, 0.9, 0.5, 1.0},
+		TermStyleVideoStep:  imgui.Vec4{0.7, 0.7, 0.3, 1.0},
+		TermStyleInstrument: imgui.Vec4{0.1, 0.95, 0.9, 1.0},
+		TermStyleError:      imgui.Vec4{0.8, 0.3, 0.3, 1.0},
+		TermStyleLog:        imgui.Vec4{0.8, 0.7, 0.3, 1.0},
+
+		// log
+		LogBackground: imgui.Vec4{0.2, 0.2, 0.3, 0.9},
+	}
 
 	// set default colors
 	style := imgui.CurrentStyle()
@@ -170,52 +213,64 @@ func newColors() *imguiColors {
 	style.SetColor(imgui.StyleColorTitleBgActive, cols.TitleBgActive)
 	style.SetColor(imgui.StyleColorBorder, cols.Border)
 
+	// we deferred setting of some colours. set them now.
+	cols.CapturedScreenTitle = cols.TitleBgActive
+	cols.CapturedScreenBorder = cols.TitleBgActive
+	cols.DisasmBreakAddress = cols.DisasmAddress
+	cols.DisasmBreakOther = cols.DisasmMnemonic
+	cols.CollisionBit = imgui.CurrentStyle().Color(imgui.StyleColorButton)
+	cols.RegisterBit = imgui.CurrentStyle().Color(imgui.StyleColorButton)
+	cols.SaveKeyBit = imgui.CurrentStyle().Color(imgui.StyleColorButton)
+
 	// convert 2600 colours to format usable by imgui
-	cols.vec4PaletteNTSC = make(vec4Palette, 0, len(colors.PaletteNTSC))
-	for _, c := range colors.PaletteNTSC {
+
+	// convert to imgiu.Vec4 first...
+	vec4PaletteNTSC := make([]imgui.Vec4, 0, len(specification.PaletteNTSC))
+	for _, c := range specification.PaletteNTSC {
 		v := imgui.Vec4{
-			float32(c.Red) / 255,
-			float32(c.Green) / 255,
-			float32(c.Blue) / 255,
+			float32(c.R) / 255,
+			float32(c.G) / 255,
+			float32(c.B) / 255,
 			1.0,
 		}
-		cols.vec4PaletteNTSC = append(cols.vec4PaletteNTSC, v)
+		vec4PaletteNTSC = append(vec4PaletteNTSC, v)
 	}
 
-	cols.vec4PalettePAL = make(vec4Palette, 0, len(colors.PalettePAL))
-	for _, c := range colors.PalettePAL {
+	vec4PalettePAL := make([]imgui.Vec4, 0, len(specification.PalettePAL))
+	for _, c := range specification.PalettePAL {
 		v := imgui.Vec4{
-			float32(c.Red) / 255,
-			float32(c.Green) / 255,
-			float32(c.Blue) / 255,
+			float32(c.R) / 255,
+			float32(c.G) / 255,
+			float32(c.B) / 255,
 			1.0,
 		}
-		cols.vec4PalettePAL = append(cols.vec4PalettePAL, v)
+		vec4PalettePAL = append(vec4PalettePAL, v)
 	}
 
-	cols.vec4PaletteAlt = make(vec4Palette, 0, len(colors.PaletteAlt))
-	for _, c := range colors.PaletteAlt {
+	vec4PaletteAlt := make([]imgui.Vec4, 0, len(reflection.PaletteElements))
+	for _, c := range reflection.PaletteElements {
 		v := imgui.Vec4{
-			float32(c.Red) / 255,
-			float32(c.Green) / 255,
-			float32(c.Blue) / 255,
+			float32(c.R) / 255,
+			float32(c.G) / 255,
+			float32(c.B) / 255,
 			1.0,
 		}
-		cols.vec4PaletteAlt = append(cols.vec4PaletteAlt, v)
+		vec4PaletteAlt = append(vec4PaletteAlt, v)
 	}
 
-	cols.packedPaletteNTSC = make(packedPalette, 0, len(cols.vec4PaletteNTSC))
-	for _, c := range cols.vec4PaletteNTSC {
+	// ...then to the packedPalette
+	cols.packedPaletteNTSC = make(packedPalette, 0, len(vec4PaletteNTSC))
+	for _, c := range vec4PaletteNTSC {
 		cols.packedPaletteNTSC = append(cols.packedPaletteNTSC, imgui.PackedColorFromVec4(c))
 	}
 
-	cols.packedPalettePAL = make(packedPalette, 0, len(cols.vec4PalettePAL))
-	for _, c := range cols.vec4PalettePAL {
+	cols.packedPalettePAL = make(packedPalette, 0, len(vec4PalettePAL))
+	for _, c := range vec4PalettePAL {
 		cols.packedPalettePAL = append(cols.packedPalettePAL, imgui.PackedColorFromVec4(c))
 	}
 
-	cols.packedPaletteAlt = make(packedPalette, 0, len(cols.vec4PaletteAlt))
-	for _, c := range cols.vec4PaletteAlt {
+	cols.packedPaletteAlt = make(packedPalette, 0, len(vec4PaletteAlt))
+	for _, c := range vec4PaletteAlt {
 		cols.packedPaletteAlt = append(cols.packedPaletteAlt, imgui.PackedColorFromVec4(c))
 	}
 

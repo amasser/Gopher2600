@@ -12,10 +12,6 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package debugger
 
@@ -34,10 +30,8 @@ import (
 // function. output will be normalised and sent to the attached terminal as
 // required.
 func (dbg *Debugger) printLine(sty terminal.Style, s string, a ...interface{}) {
-	// resolve string placeholders for styles other than the help style. not
-	// filtering the help style causes HELP output to fail; because the
-	// commandline template uses fmt style placeholders.
-	if sty != terminal.StyleHelp {
+	// resolve placeholders if there are arguments to insert
+	if len(a) > 0 {
 		s = fmt.Sprintf(s, a...)
 	}
 
@@ -62,7 +56,7 @@ type styleWriter struct {
 	style terminal.Style
 }
 
-func (dbg *Debugger) printStyle(sty terminal.Style) *styleWriter {
+func (dbg *Debugger) printStyle(sty terminal.Style) *styleWriter { // nolint: unparam
 	return &styleWriter{
 		dbg:   dbg,
 		style: sty,
@@ -72,8 +66,4 @@ func (dbg *Debugger) printStyle(sty terminal.Style) *styleWriter {
 func (wrt styleWriter) Write(p []byte) (n int, err error) {
 	wrt.dbg.printLine(wrt.style, string(p))
 	return len(p), nil
-}
-
-func (dbg *Debugger) printInstrument(mi fmt.Stringer) {
-	dbg.printLine(terminal.StyleInstrument, "%s", mi.String())
 }

@@ -12,10 +12,6 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package registers_test
 
@@ -27,7 +23,7 @@ import (
 	"github.com/jetsetilly/gopher2600/test"
 )
 
-func TestDecimalMode(t *testing.T) {
+func TestDecimalModeCarry(t *testing.T) {
 	var rcarry bool
 
 	// initialisation
@@ -46,21 +42,21 @@ func TestDecimalMode(t *testing.T) {
 	// subtraction with carry (subtract value)
 	r8.Load(9)
 	rtest.EquateRegisters(t, r8, 0x09)
-	rcarry, _, _, _ = r8.SubtractDecimal(1, true)
+	r8.SubtractDecimal(1, true)
 	rtest.EquateRegisters(t, r8, 0x08)
 
 	// subtraction without carry (subtract value and another 1)
-	rcarry, _, _, _ = r8.SubtractDecimal(1, false)
+	r8.SubtractDecimal(1, false)
 	rtest.EquateRegisters(t, r8, 0x06)
 
 	// addition on tens boundary
 	r8.Load(9)
 	rtest.EquateRegisters(t, r8, 0x09)
-	rcarry, _, _, _ = r8.AddDecimal(1, false)
+	r8.AddDecimal(1, false)
 	rtest.EquateRegisters(t, r8, 0x10)
 
 	// subtraction on tens boundary
-	rcarry, _, _, _ = r8.SubtractDecimal(1, true)
+	r8.SubtractDecimal(1, true)
 	rtest.EquateRegisters(t, r8, 0x09)
 
 	// addition on hundreds boundary
@@ -71,8 +67,22 @@ func TestDecimalMode(t *testing.T) {
 	test.Equate(t, rcarry, true)
 
 	// subtraction on hundreds boundary
-	rcarry, _, _, _ = r8.SubtractDecimal(1, true)
+	r8.SubtractDecimal(1, true)
 	rtest.EquateRegisters(t, r8, 0x99)
+}
+
+func TestDecimalModeZero(t *testing.T) {
+	var zero bool
+
+	// initialisation
+	r8 := registers.NewRegister(0, "test")
+
+	// subtract to zero
+	r8.Load(0x02)
+	_, zero, _, _ = r8.SubtractDecimal(1, true)
+	test.Equate(t, zero, false)
+	_, zero, _, _ = r8.SubtractDecimal(1, true)
+	test.Equate(t, zero, true)
 }
 
 func TestDecimalModeInvalid(t *testing.T) {

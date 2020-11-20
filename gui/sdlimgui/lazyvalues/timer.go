@@ -12,10 +12,6 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package lazyvalues
 
@@ -23,28 +19,29 @@ import "sync/atomic"
 
 // LazyTimer lazily accesses RIOT timer information from the emulator.
 type LazyTimer struct {
-	val *Values
+	val *LazyValues
 
-	atomicDivider        atomic.Value // string
-	atomicINTIMvalue     atomic.Value // uint8
-	atomicTicksRemaining atomic.Value // int
+	divider        atomic.Value // string
+	intim          atomic.Value // uint8
+	ticksRemaining atomic.Value // int
 
 	Divider        string
 	INTIMvalue     uint8
 	TicksRemaining int
 }
 
-func newLazyTimer(val *Values) *LazyTimer {
+func newLazyTimer(val *LazyValues) *LazyTimer {
 	return &LazyTimer{val: val}
 }
 
+func (lz *LazyTimer) push() {
+	lz.divider.Store(lz.val.Dbg.VCS.RIOT.Timer.Divider.String())
+	lz.intim.Store(lz.val.Dbg.VCS.RIOT.Timer.INTIMvalue)
+	lz.ticksRemaining.Store(lz.val.Dbg.VCS.RIOT.Timer.TicksRemaining)
+}
+
 func (lz *LazyTimer) update() {
-	lz.val.Dbg.PushRawEvent(func() {
-		lz.atomicDivider.Store(lz.val.VCS.RIOT.Timer.Divider.String())
-		lz.atomicINTIMvalue.Store(lz.val.VCS.RIOT.Timer.INTIMvalue)
-		lz.atomicTicksRemaining.Store(lz.val.VCS.RIOT.Timer.TicksRemaining)
-	})
-	lz.Divider, _ = lz.atomicDivider.Load().(string)
-	lz.INTIMvalue, _ = lz.atomicINTIMvalue.Load().(uint8)
-	lz.TicksRemaining, _ = lz.atomicTicksRemaining.Load().(int)
+	lz.Divider, _ = lz.divider.Load().(string)
+	lz.INTIMvalue, _ = lz.intim.Load().(uint8)
+	lz.TicksRemaining, _ = lz.ticksRemaining.Load().(int)
 }

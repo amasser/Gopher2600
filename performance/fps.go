@@ -12,19 +12,16 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package performance
 
-import "github.com/jetsetilly/gopher2600/television"
+import "github.com/jetsetilly/gopher2600/hardware/television"
 
-// CalcFPS takes the the number of frames and duration and returns the
-// frames-per-second and the accuracy of that value as a percentage.
-func CalcFPS(tv television.Television, numFrames int, duration float64) (fps float64, accuracy float64) {
+// CalcFPS takes the the number of frames and duration (in seconds) and returns
+// the frames-per-second and the accuracy of that value as a percentage.
+func CalcFPS(tv *television.Television, numFrames int, duration float64) (fps float64, accuracy float64) {
 	fps = float64(numFrames) / duration
-	accuracy = 100 * float64(numFrames) / (duration * float64(tv.GetSpec().FramesPerSecond))
+	spec := tv.GetSpec()
+	accuracy = 100 * float64(numFrames) / (duration * float64(spec.FramesPerSecond))
 	return fps, accuracy
 }

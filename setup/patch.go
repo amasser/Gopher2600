@@ -12,18 +12,14 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package setup
 
 import (
 	"fmt"
 
+	"github.com/jetsetilly/gopher2600/curated"
 	"github.com/jetsetilly/gopher2600/database"
-	"github.com/jetsetilly/gopher2600/errors"
 	"github.com/jetsetilly/gopher2600/hardware"
 	"github.com/jetsetilly/gopher2600/patch"
 )
@@ -38,7 +34,7 @@ const (
 )
 
 // Patch is used to patch cartridge memory after cartridge has been
-// attached/loaded
+// attached/loaded.
 type Patch struct {
 	cartHash  string
 	patchFile string
@@ -50,10 +46,10 @@ func deserialisePatchEntry(fields database.SerialisedEntry) (database.Entry, err
 
 	// basic sanity check
 	if len(fields) > numPatchFields {
-		return nil, errors.New(errors.SetupPatchError, "too many fields in patch entry")
+		return nil, curated.Errorf("patch: too many fields in patch entry")
 	}
 	if len(fields) < numPatchFields {
-		return nil, errors.New(errors.SetupPatchError, "too few fields in patch entry")
+		return nil, curated.Errorf("patch: too few fields in patch entry")
 	}
 
 	set.cartHash = fields[patchFieldCartHash]
@@ -63,17 +59,17 @@ func deserialisePatchEntry(fields database.SerialisedEntry) (database.Entry, err
 	return set, nil
 }
 
-// ID implements the database.Entry interface
+// ID implements the database.Entry interface.
 func (set Patch) ID() string {
 	return patchID
 }
 
-// String implements the database.Entry interface
+// String implements the database.Entry interface.
 func (set Patch) String() string {
 	return fmt.Sprintf("%s, %s", set.cartHash, set.patchFile)
 }
 
-// Serialise implements the database.Entry interface
+// Serialise implements the database.Entry interface.
 func (set *Patch) Serialise() (database.SerialisedEntry, error) {
 	return database.SerialisedEntry{
 			set.cartHash,
@@ -83,22 +79,22 @@ func (set *Patch) Serialise() (database.SerialisedEntry, error) {
 		nil
 }
 
-// CleanUp implements the database.Entry interface
+// CleanUp implements the database.Entry interface.
 func (set Patch) CleanUp() error {
 	// no cleanup necessary
 	return nil
 }
 
-// matchCartHash implements setupEntry interface
+// matchCartHash implements setupEntry interface.
 func (set Patch) matchCartHash(hash string) bool {
 	return set.cartHash == hash
 }
 
-// apply implements setupEntry interface
+// apply implements setupEntry interface.
 func (set Patch) apply(vcs *hardware.VCS) error {
 	_, err := patch.CartridgeMemory(vcs.Mem.Cart, set.patchFile)
 	if err != nil {
-		return errors.New(errors.SetupPatchError, err)
+		return curated.Errorf("patch: %v", err)
 	}
 	return nil
 }

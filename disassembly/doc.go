@@ -12,10 +12,6 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 // Package disassembly coordinates the disassembly of Atari2600 (6507)
 // cartridges.
@@ -37,7 +33,11 @@
 // EntryTypeDecode only. Useful for printing static disassemblies of
 // a cartridge but probably not much else.
 //
-// The Iteration type provides a convenient way of iterating of the disassembly
-// entries. It takes care of empty entries and entries not of the correct entry
-// type.
+// The iteration types provides a convenient way of iterating of the
+// disassembly entries. It takes care of empty entries and entries not of the
+// correct entry type.
+//
+// The Grep() function provides a quick way of searching the disassembly with a
+// scope directive. More complex search schemes can be written with the
+// iteration types.
 package disassembly

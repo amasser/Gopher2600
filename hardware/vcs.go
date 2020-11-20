@@ -12,75 +12,72 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package hardware
 
 import (
 	"github.com/jetsetilly/gopher2600/cartridgeloader"
+	"github.com/jetsetilly/gopher2600/curated"
 	"github.com/jetsetilly/gopher2600/hardware/cpu"
 	"github.com/jetsetilly/gopher2600/hardware/memory"
 	"github.com/jetsetilly/gopher2600/hardware/memory/addresses"
+	"github.com/jetsetilly/gopher2600/hardware/memory/cartridge"
+	"github.com/jetsetilly/gopher2600/hardware/preferences"
 	"github.com/jetsetilly/gopher2600/hardware/riot"
-	"github.com/jetsetilly/gopher2600/hardware/riot/input"
+	"github.com/jetsetilly/gopher2600/hardware/riot/ports"
+	"github.com/jetsetilly/gopher2600/hardware/riot/ports/controllers"
+	"github.com/jetsetilly/gopher2600/hardware/television"
 	"github.com/jetsetilly/gopher2600/hardware/tia"
-	"github.com/jetsetilly/gopher2600/television"
 )
 
-// VCS struct is the main container for the emulated components of the VCS
+// VCS struct is the main container for the emulated components of the VCS.
 type VCS struct {
+	Prefs *preferences.Preferences
+	TV    *television.Television
+
+	// references to the different components of the VCS. do not take copies of
+	// these pointer values because the rewind feature will change them.
 	CPU  *cpu.CPU
-	Mem  *memory.VCSMemory
-	TIA  *tia.TIA
+	Mem  *memory.Memory
 	RIOT *riot.RIOT
-
-	TV television.Television
-
-	Panel           input.Port
-	HandController0 input.Port
-	HandController1 input.Port
+	TIA  *tia.TIA
 }
 
 // NewVCS creates a new VCS and everything associated with the hardware. It is
-// used for all aspects of emulation: debugging sessions, and regular play
-func NewVCS(tv television.Television) (*VCS, error) {
-	var err error
-
-	vcs := &VCS{TV: tv}
-
-	vcs.Mem, err = memory.NewVCSMemory()
+// used for all aspects of emulation: debugging sessions, and regular play.
+func NewVCS(tv *television.Television) (*VCS, error) {
+	// set up preferences
+	prefs, err := preferences.NewPreferences()
 	if err != nil {
 		return nil, err
 	}
 
-	vcs.CPU, err = cpu.NewCPU(vcs.Mem)
+	// set up hardware
+	vcs := &VCS{
+		Prefs: prefs,
+		TV:    tv,
+	}
+
+	vcs.Mem = memory.NewMemory(vcs.Prefs)
+	vcs.CPU = cpu.NewCPU(vcs.Prefs, vcs.Mem)
+	vcs.RIOT = riot.NewRIOT(vcs.Prefs, vcs.Mem.RIOT, vcs.Mem.TIA)
+	vcs.TIA = tia.NewTIA(vcs.TV, vcs.Mem.TIA, vcs.RIOT.Ports)
+
+	err = vcs.RIOT.Ports.AttachPlayer(ports.Player0ID, controllers.NewAuto)
 	if err != nil {
 		return nil, err
 	}
 
-	vcs.RIOT, err = riot.NewRIOT(vcs.Mem.RIOT, vcs.Mem.TIA)
+	err = vcs.RIOT.Ports.AttachPlayer(ports.Player1ID, controllers.NewAuto)
 	if err != nil {
 		return nil, err
 	}
-
-	vcs.TIA, err = tia.NewTIA(vcs.TV, vcs.Mem.TIA, &vcs.RIOT.Input.VBlankBits)
-	if err != nil {
-		return nil, err
-	}
-
-	vcs.Panel = vcs.RIOT.Input.Panel
-	vcs.HandController0 = vcs.RIOT.Input.HandController0
-	vcs.HandController1 = vcs.RIOT.Input.HandController1
 
 	return vcs, nil
 }
 
-// AttachCartridge loads a cartridge (given by filename) into the emulators
-// memory. While this function can be called directly it is advised that the
-// setup package be used in most circumstances.
+// AttachCartridge to this VCS. While this function can be called directly it
+// is advised that the setup package be used in most circumstances.
 func (vcs *VCS) AttachCartridge(cartload cartridgeloader.Loader) error {
 	if cartload.Filename == "" {
 		vcs.Mem.Cart.Eject()
@@ -99,47 +96,27 @@ func (vcs *VCS) AttachCartridge(cartload cartridgeloader.Loader) error {
 	return nil
 }
 
-// Reset emulates the reset switch on the console panel
-// !!TODO: hard/soft reset option
-// !!TODO: random data on startup option
+// Reset emulates the reset switch on the console panel.
 func (vcs *VCS) Reset() error {
 	err := vcs.TV.Reset()
 	if err != nil {
 		return err
 	}
 
-	vcs.Mem.Cart.Initialise()
-
-	// !TODO: reset TIA and RIOT (including RAM)
-
+	vcs.Mem.Reset()
 	vcs.CPU.Reset()
 
+	// reset of ports must happen after reset of memory because ports will
+	// update memory to the current state of the peripherals
+	vcs.RIOT.Ports.Reset()
+
+	// reset PC using reset address in cartridge memory
 	err = vcs.CPU.LoadPCIndirect(addresses.Reset)
 	if err != nil {
-		return err
+		if !curated.Is(err, cartridge.Ejected) {
+			return err
+		}
 	}
 
 	return nil
-}
-
-// we use this to short input.Port interfaces for the CheckInput() function.
-// not part of the input.Port interface proper because we don't want to expose
-// the CheckInput function to outside this package.
-type portPoller interface {
-	CheckInput() error
-}
-
-// check all devices for pending input
-func (vcs *VCS) checkDeviceInput() error {
-	err := vcs.HandController0.(portPoller).CheckInput()
-	if err != nil {
-		return err
-	}
-
-	err = vcs.HandController1.(portPoller).CheckInput()
-	if err != nil {
-		return err
-	}
-
-	return vcs.Panel.(portPoller).CheckInput()
 }

@@ -12,10 +12,6 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package debugger
 
@@ -24,10 +20,9 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/jetsetilly/gopher2600/curated"
 	"github.com/jetsetilly/gopher2600/debugger/terminal"
 	"github.com/jetsetilly/gopher2600/debugger/terminal/commandline"
-	"github.com/jetsetilly/gopher2600/errors"
-	"github.com/jetsetilly/gopher2600/hardware/memory"
 )
 
 type watcher struct {
@@ -37,48 +32,49 @@ type watcher struct {
 	// watcher will match regardless of the value
 	matchValue bool
 	value      uint8
+
+	// wether to compare the address as used or whether to consider mirrored
+	// addresses too
+	mirrors bool
 }
 
-func (wtr watcher) String() string {
+func (w watcher) String() string {
 	val := ""
-	if wtr.matchValue {
-		val = fmt.Sprintf(" (value=%#02x)", wtr.value)
+	if w.matchValue {
+		val = fmt.Sprintf(" (value=%#02x)", w.value)
 	}
 	event := "write"
-	if wtr.ai.read {
+	if w.ai.read {
 		event = "read"
 	}
-	return fmt.Sprintf("%s %s%s", wtr.ai, event, val)
+	return fmt.Sprintf("%s %s%s", w.ai, event, val)
 }
 
-// the list of currently defined watches in the system
+// the list of currently defined watches in the system.
 type watches struct {
-	dbg    *Debugger
-	vcsmem *memory.VCSMemory
-
+	dbg                 *Debugger
 	watches             []watcher
 	lastAddressAccessed uint16
 }
 
-// newWatches is the preferred method of initialisation for the watches type
+// newWatches is the preferred method of initialisation for the watches type.
 func newWatches(dbg *Debugger) *watches {
 	wtc := &watches{
-		dbg:    dbg,
-		vcsmem: dbg.vcs.Mem,
+		dbg: dbg,
 	}
 	wtc.clear()
 	return wtc
 }
 
-// clear all watches
+// clear all watches.
 func (wtc *watches) clear() {
 	wtc.watches = make([]watcher, 0, 10)
 }
 
-// drop a specific watcher by a position in the list
+// drop a specific watcher by a position in the list.
 func (wtc *watches) drop(num int) error {
 	if len(wtc.watches)-1 < num {
-		return errors.New(errors.CommandError, fmt.Sprintf("watch #%d is not defined", num))
+		return curated.Errorf("watch #%d is not defined", num)
 	}
 
 	h := wtc.watches[:num]
@@ -92,53 +88,62 @@ func (wtc *watches) drop(num int) error {
 
 // check compares the current state of the emulation with every watch
 // condition. returns a string listing every condition that matches (separated
-// by \n)
+// by \n).
 func (wtc *watches) check(previousResult string) string {
+	if len(wtc.watches) == 0 {
+		return previousResult
+	}
+
 	checkString := strings.Builder{}
 	checkString.WriteString(previousResult)
 
 	for i := range wtc.watches {
 		// continue loop if we're not matching last address accessed
-		if wtc.watches[i].ai.address != wtc.vcsmem.LastAccessAddress {
-			continue
+		if wtc.watches[i].mirrors {
+			if wtc.watches[i].ai.mappedAddress != wtc.dbg.VCS.Mem.LastAccessAddressMapped {
+				continue
+			}
+		} else {
+			if wtc.watches[i].ai.address != wtc.dbg.VCS.Mem.LastAccessAddress {
+				continue
+			}
 		}
 
 		// continue if this is a repeat of the last address accessed
-		if wtc.lastAddressAccessed == wtc.vcsmem.LastAccessAddress {
+		if wtc.lastAddressAccessed == wtc.dbg.VCS.Mem.LastAccessAddress {
 			continue
 		}
 
 		// match watch event to the type of memory access
-		if (wtc.watches[i].ai.read == false && wtc.vcsmem.LastAccessWrite) ||
-			(wtc.watches[i].ai.read == true && !wtc.vcsmem.LastAccessWrite) {
-
+		if (!wtc.watches[i].ai.read && wtc.dbg.VCS.Mem.LastAccessWrite) ||
+			(wtc.watches[i].ai.read && !wtc.dbg.VCS.Mem.LastAccessWrite) {
 			// match watched-for value to the value that was read/written to the
 			// watched address
 			if !wtc.watches[i].matchValue {
 				// prepare string according to event
-				if wtc.vcsmem.LastAccessWrite {
-					checkString.WriteString(fmt.Sprintf("watch at %s\n", wtc.watches[i]))
+				if wtc.dbg.VCS.Mem.LastAccessWrite {
+					checkString.WriteString(fmt.Sprintf("watch (write) at %s\n", wtc.watches[i]))
 				} else {
-					checkString.WriteString(fmt.Sprintf("watch at %s\n", wtc.watches[i]))
+					checkString.WriteString(fmt.Sprintf("watch (read) at %s\n", wtc.watches[i]))
 				}
-			} else if wtc.watches[i].matchValue && (wtc.watches[i].value == wtc.vcsmem.LastAccessValue) {
+			} else if wtc.watches[i].matchValue && (wtc.watches[i].value == wtc.dbg.VCS.Mem.LastAccessValue) {
 				// prepare string according to event
-				if wtc.vcsmem.LastAccessWrite {
-					checkString.WriteString(fmt.Sprintf("watch at %s %#02x\n", wtc.watches[i], wtc.vcsmem.LastAccessValue))
+				if wtc.dbg.VCS.Mem.LastAccessWrite {
+					checkString.WriteString(fmt.Sprintf("watch (write) at %s %#02x\n", wtc.watches[i], wtc.dbg.VCS.Mem.LastAccessValue))
 				} else {
-					checkString.WriteString(fmt.Sprintf("watch at %s %#02x\n", wtc.watches[i], wtc.vcsmem.LastAccessValue))
+					checkString.WriteString(fmt.Sprintf("watch (read) at %s %#02x\n", wtc.watches[i], wtc.dbg.VCS.Mem.LastAccessValue))
 				}
 			}
 		}
 	}
 
 	// note what the last address accessed was
-	wtc.lastAddressAccessed = wtc.vcsmem.LastAccessAddress
+	wtc.lastAddressAccessed = wtc.dbg.VCS.Mem.LastAccessAddress
 
 	return checkString.String()
 }
 
-// list currently defined watches
+// list currently defined watches.
 func (wtc *watches) list() {
 	if len(wtc.watches) == 0 {
 		wtc.dbg.printLine(terminal.StyleFeedback, "no watches")
@@ -152,8 +157,9 @@ func (wtc *watches) list() {
 
 // parse tokens and add new watch. unlike breakpoints and traps, only one watch
 // at a time can be specified on the command line.
-func (wtc *watches) parseWatch(tokens *commandline.Tokens) error {
+func (wtc *watches) parseCommand(tokens *commandline.Tokens) error {
 	var event int
+	var mirrors bool
 
 	const (
 		either int = iota
@@ -161,16 +167,29 @@ func (wtc *watches) parseWatch(tokens *commandline.Tokens) error {
 		write
 	)
 
-	// read mode
-	mode, _ := tokens.Get()
-	mode = strings.ToUpper(mode)
-	switch mode {
+	// event type
+	arg, _ := tokens.Get()
+	arg = strings.ToUpper(arg)
+	switch arg {
 	case "READ":
 		event = read
 	case "WRITE":
 		event = write
 	default:
 		event = either
+		tokens.Unget()
+	}
+
+	// mirror address or not
+	arg, _ = tokens.Get()
+	arg = strings.ToUpper(arg)
+	switch arg {
+	case "MIRRORS":
+		fallthrough
+	case "ANY":
+		mirrors = true
+	default:
+		mirrors = false
 		tokens.Unget()
 	}
 
@@ -181,22 +200,17 @@ func (wtc *watches) parseWatch(tokens *commandline.Tokens) error {
 	var ai *addressInfo
 
 	switch event {
+	default:
+		fallthrough // default to read case
 	case read:
 		ai = wtc.dbg.dbgmem.mapAddress(a, true)
 	case write:
 		ai = wtc.dbg.dbgmem.mapAddress(a, false)
-	default:
-		// default to write address and then read address if that's not
-		// possible
-		ai = wtc.dbg.dbgmem.mapAddress(a, false)
-		if ai == nil {
-			ai = wtc.dbg.dbgmem.mapAddress(a, true)
-		}
 	}
 
-	// mapping of the address was unsucessful
+	// mapping of the address was unsuccessful
 	if ai == nil {
-		return errors.New(errors.CommandError, fmt.Sprintf("invalid watch address: %s", a))
+		return curated.Errorf("invalid watch address: %s", a)
 	}
 
 	// get value if possible
@@ -206,7 +220,7 @@ func (wtc *watches) parseWatch(tokens *commandline.Tokens) error {
 	if useVal {
 		val, err = strconv.ParseUint(v, 0, 8)
 		if err != nil {
-			return errors.New(errors.CommandError, fmt.Sprintf("invalid watch value (%s)", a))
+			return curated.Errorf("invalid watch value (%s)", a)
 		}
 	}
 
@@ -214,11 +228,11 @@ func (wtc *watches) parseWatch(tokens *commandline.Tokens) error {
 		ai:         *ai,
 		matchValue: useVal,
 		value:      uint8(val),
+		mirrors:    mirrors,
 	}
 
 	// check to see if watch already exists
 	for _, w := range wtc.watches {
-
 		// the conditions for a watch matching are very specific: both must
 		// have the same address, be the same /type/ of address (read or
 		// write), and the same watch value (if applicable)
@@ -230,8 +244,7 @@ func (wtc *watches) parseWatch(tokens *commandline.Tokens) error {
 		if w.ai.address == nw.ai.address &&
 			w.ai.read == nw.ai.read &&
 			w.matchValue == nw.matchValue && w.value == nw.value {
-
-			return errors.New(errors.CommandError, fmt.Sprintf("already being watched (%s)", w))
+			return curated.Errorf("already being watched (%s)", w)
 		}
 	}
 

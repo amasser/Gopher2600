@@ -12,10 +12,6 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package gui
 
@@ -25,13 +21,13 @@ package gui
 // and sent over a registered event channel.
 type Event interface{}
 
-// EventQuit is sent when the gui window is closed
+// EventQuit is sent when the gui window is closed.
 type EventQuit struct{}
 
-// KeyMod identifies
+// KeyMod identifies.
 type KeyMod int
 
-// list of valud key modifiers
+// list of valud key modifiers.
 const (
 	KeyModNone KeyMod = iota
 	KeyModShift
@@ -39,24 +35,24 @@ const (
 	KeyModAlt
 )
 
-// EventKeyboard is the data that accompanies EventKeyboard events
+// EventKeyboard is the data that accompanies EventKeyboard events.
 type EventKeyboard struct {
 	Key  string
 	Down bool
 	Mod  KeyMod
 }
 
-// EventMouseMotion is the data that accompanies MouseEventMove events
+// EventMouseMotion is the data that accompanies MouseEventMove events.
 type EventMouseMotion struct {
 	// as a fraction of the window's dimensions
 	X float32
 	Y float32
 }
 
-// MouseButton identifies the mouse button
+// MouseButton identifies the mouse button.
 type MouseButton int
 
-// list of valid MouseButtonIDs
+// list of valid MouseButtonIDs.
 const (
 	MouseButtonNone MouseButton = iota
 	MouseButtonLeft
@@ -64,13 +60,13 @@ const (
 	MouseButtonMiddle
 )
 
-// EventMouseButton is the data that accompanies MouseEventMove events
+// EventMouseButton is the data that accompanies MouseEventMove events.
 type EventMouseButton struct {
 	Button MouseButton
 	Down   bool
 }
 
-// EventDbgMouseButton is the data that accompanies MouseEventMove events
+// EventDbgMouseButton is the data that accompanies MouseEventMove events.
 type EventDbgMouseButton struct {
 	Button   MouseButton
 	Down     bool

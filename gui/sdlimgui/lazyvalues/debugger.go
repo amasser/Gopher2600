@@ -12,10 +12,6 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package lazyvalues
 
@@ -23,31 +19,33 @@ import (
 	"sync/atomic"
 
 	"github.com/jetsetilly/gopher2600/debugger"
+	"github.com/jetsetilly/gopher2600/disassembly"
 )
 
-// LazyDebugger lazily accesses Debgger information
+// LazyDebugger lazily accesses Debugger information.
 type LazyDebugger struct {
-	val *Values
+	val *LazyValues
 
-	atomicQuantum  atomic.Value // debugger.QuantumMode
-	atomicLastBank atomic.Value // int
-	Quantum        debugger.QuantumMode
-	LastBank       int
+	quantum    atomic.Value // debugger.QuantumMode
+	lastResult atomic.Value // disassembly.Entry
+
+	Quantum    debugger.QuantumMode
+	LastResult disassembly.Entry
 }
 
-func newLazyDebugger(val *Values) *LazyDebugger {
+func newLazyDebugger(val *LazyValues) *LazyDebugger {
 	lz := &LazyDebugger{val: val}
 	return lz
 }
 
-func (lz *LazyDebugger) update() {
-	lz.val.Dbg.PushRawEvent(func() {
-		lz.atomicLastBank.Store(lz.val.Dbg.GetLastBank())
-		lz.atomicQuantum.Store(lz.val.Dbg.GetQuantum())
-	})
-	lz.Quantum, _ = lz.atomicQuantum.Load().(debugger.QuantumMode)
+func (lz *LazyDebugger) push() {
+	lz.quantum.Store(lz.val.Dbg.GetQuantum())
+	lz.lastResult.Store(lz.val.Dbg.GetLastResult())
+}
 
-	if lz.atomicLastBank.Load() != nil {
-		lz.LastBank = lz.atomicLastBank.Load().(int)
+func (lz *LazyDebugger) update() {
+	lz.Quantum, _ = lz.quantum.Load().(debugger.QuantumMode)
+	if lz.lastResult.Load() != nil {
+		lz.LastResult = lz.lastResult.Load().(disassembly.Entry)
 	}
 }

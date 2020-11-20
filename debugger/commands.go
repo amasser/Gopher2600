@@ -12,30 +12,33 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package debugger
 
 import (
 	"bytes"
+	"encoding/hex"
 	"fmt"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/jetsetilly/gopher2600/cartridgeloader"
+	"github.com/jetsetilly/gopher2600/curated"
 	"github.com/jetsetilly/gopher2600/debugger/script"
 	"github.com/jetsetilly/gopher2600/debugger/terminal"
 	"github.com/jetsetilly/gopher2600/debugger/terminal/commandline"
 	"github.com/jetsetilly/gopher2600/disassembly"
-	"github.com/jetsetilly/gopher2600/errors"
 	"github.com/jetsetilly/gopher2600/gui"
 	"github.com/jetsetilly/gopher2600/hardware/cpu/registers"
+	"github.com/jetsetilly/gopher2600/hardware/memory/cartridge/plusrom"
 	"github.com/jetsetilly/gopher2600/hardware/memory/memorymap"
-	"github.com/jetsetilly/gopher2600/hardware/riot/input"
+	"github.com/jetsetilly/gopher2600/hardware/riot/ports"
+	"github.com/jetsetilly/gopher2600/hardware/riot/ports/controllers"
+	"github.com/jetsetilly/gopher2600/hardware/television/signal"
+	"github.com/jetsetilly/gopher2600/linter"
+	"github.com/jetsetilly/gopher2600/logger"
 	"github.com/jetsetilly/gopher2600/patch"
 	"github.com/jetsetilly/gopher2600/symbols"
 )
@@ -67,11 +70,11 @@ func init() {
 	sort.Stable(scriptUnsafeCommands)
 }
 
-// parseCommand tokenises the input and processes the tokens
-func (dbg *Debugger) parseCommand(cmd string, scribe bool, echo bool) (bool, error) {
+// parseCommand tokenises the input and processes the tokens.
+func (dbg *Debugger) parseCommand(cmd string, scribe bool, echo bool) error {
 	tokens, err := dbg.tokeniseCommand(cmd, scribe, echo)
 	if err != nil {
-		return false, err
+		return err
 	}
 	return dbg.processTokens(tokens)
 }
@@ -80,9 +83,9 @@ func (dbg *Debugger) tokeniseCommand(cmd string, scribe bool, echo bool) (*comma
 	// tokenise input
 	tokens := commandline.TokeniseInput(cmd)
 
-	// if there are no tokens in the input then continue with onEmptyInput
+	// if there are no tokens in the input then continue with a default action
 	if tokens.Remaining() == 0 {
-		return dbg.tokeniseCommand(onEmptyInput, true, false)
+		return dbg.tokeniseCommand("STEP", true, false)
 	}
 
 	// check validity of tokenised input
@@ -94,7 +97,7 @@ func (dbg *Debugger) tokeniseCommand(cmd string, scribe bool, echo bool) (*comma
 	// print normalised input if this is command from an interactive source
 	// and not an auto-command
 	if echo {
-		dbg.printLine(terminal.StyleInput, tokens.String())
+		dbg.printLine(terminal.StyleEcho, tokens.String())
 	}
 
 	// test to see if command is allowed when recording/playing a script
@@ -106,7 +109,7 @@ func (dbg *Debugger) tokeniseCommand(cmd string, scribe bool, echo bool) (*comma
 		// fail when the tokens DO match the scriptUnsafe template (ie. when
 		// there is no err from the validate function)
 		if err == nil {
-			return nil, errors.New(errors.CommandError, fmt.Sprintf("'%s' is unsafe to use in scripts", tokens.String()))
+			return nil, curated.Errorf("'%s' is unsafe to use in scripts", tokens.String())
 		}
 
 		// record command if it auto is false (is not a result of an "auto" command
@@ -118,21 +121,20 @@ func (dbg *Debugger) tokeniseCommand(cmd string, scribe bool, echo bool) (*comma
 	return tokens, nil
 }
 
-// processTokenGroup call processTokens for each entry in the array of tokens
-func (dbg *Debugger) processTokenGroup(tokenGrp []*commandline.Tokens) (bool, error) {
+// processTokenGroup call processTokens for each entry in the array of tokens.
+func (dbg *Debugger) processTokenGroup(tokenGrp []*commandline.Tokens) error {
 	var err error
-	var ok bool
 
 	for _, t := range tokenGrp {
-		ok, err = dbg.processTokens(t)
+		err = dbg.processTokens(t)
 		if err != nil {
-			return false, err
+			return err
 		}
 	}
-	return ok, nil
+	return nil
 }
 
-func (dbg *Debugger) processTokens(tokens *commandline.Tokens) (bool, error) {
+func (dbg *Debugger) processTokens(tokens *commandline.Tokens) error {
 	// check first token. if this token makes sense then we will consume the
 	// rest of the tokens appropriately
 	tokens.Reset()
@@ -140,7 +142,7 @@ func (dbg *Debugger) processTokens(tokens *commandline.Tokens) (bool, error) {
 
 	switch command {
 	default:
-		return false, errors.New(errors.CommandError, fmt.Sprintf("%s is not yet implemented", command))
+		return curated.Errorf("%s is not yet implemented", command)
 
 	case cmdHelp:
 		keyword, ok := tokens.Get()
@@ -151,10 +153,10 @@ func (dbg *Debugger) processTokens(tokens *commandline.Tokens) (bool, error) {
 		}
 
 		// help can be called during script recording but we don't want to
-		// include it
+
 		dbg.scriptScribe.Rollback()
 
-		return false, nil
+		return nil
 
 	case cmdQuit:
 		if dbg.scriptScribe.IsActive() {
@@ -165,25 +167,23 @@ func (dbg *Debugger) processTokens(tokens *commandline.Tokens) (bool, error) {
 			// we don't want the QUIT command to appear in the script so
 			// rollback last entry before we commit it in EndSession()
 			dbg.scriptScribe.Rollback()
-			dbg.scriptScribe.EndSession()
+			err := dbg.scriptScribe.EndSession()
+			if err != nil {
+				return err
+			}
 		} else {
 			dbg.running = false
 		}
 
 	case cmdReset:
-		err := dbg.vcs.Reset()
-		if err != nil {
-			return false, err
-		}
-		err = dbg.tv.Reset()
-		if err != nil {
-			return false, err
-		}
-		dbg.printLine(terminal.StyleFeedback, "machine reset")
+		// resetting in the middle of a CPU instruction requires the input loop
+		// to be unwound before continuing
+		dbg.restartInputLoop(dbg.reset)
 
 	case cmdRun:
 		dbg.runUntilHalt = true
-		return true, nil
+		dbg.continueEmulation = true
+		return nil
 
 	case cmdHalt:
 		dbg.haltImmediately = true
@@ -203,14 +203,15 @@ func (dbg *Debugger) processTokens(tokens *commandline.Tokens) (bool, error) {
 		default:
 			// does not change quantum
 			tokens.Unget()
-			err := dbg.stepTraps.parseTrap(tokens)
+			err := dbg.stepTraps.parseCommand(tokens)
 			if err != nil {
-				return false, errors.New(errors.CommandError, fmt.Sprintf("unknown step mode (%s)", mode))
+				return curated.Errorf("unknown step mode (%s)", mode)
 			}
 			dbg.runUntilHalt = true
 		}
 
-		return true, nil
+		dbg.continueEmulation = true
+		return nil
 
 	case cmdQuantum:
 		mode, _ := tokens.Get()
@@ -232,25 +233,25 @@ func (dbg *Debugger) processTokens(tokens *commandline.Tokens) (bool, error) {
 			saveFile, _ := tokens.Get()
 			err = dbg.scriptScribe.StartSession(saveFile)
 			if err != nil {
-				return false, err
+				return err
 			}
 
 			// we don't want SCRIPT RECORD command to appear in the
 			// script
 			dbg.scriptScribe.Rollback()
 
-			return false, nil
+			return nil
 
 		case "END":
 			dbg.scriptScribe.Rollback()
 			err := dbg.scriptScribe.EndSession()
-			return false, err
+			return err
 
 		default:
 			// run a script
 			scr, err := script.RescribeScript(option)
 			if err != nil {
-				return false, err
+				return err
 			}
 
 			if dbg.scriptScribe.IsActive() {
@@ -258,24 +259,59 @@ func (dbg *Debugger) processTokens(tokens *commandline.Tokens) (bool, error) {
 				// command to the new script file but indicate that we'll be
 				// entering a new script and so don't want to repeat the
 				// commands from that script
-				dbg.scriptScribe.StartPlayback()
+				err := dbg.scriptScribe.StartPlayback()
+				if err != nil {
+					return err
+				}
 
-				defer func() {
-					dbg.scriptScribe.EndPlayback()
-				}()
+				defer dbg.scriptScribe.EndPlayback()
 			}
 
 			err = dbg.inputLoop(scr, false)
 			if err != nil {
-				return false, err
+				return err
 			}
+		}
+
+	case cmdRewind:
+		// note that we calling the rewind.Goto*() functions directly and not
+		// using the debugger.PushRewind() function.
+		arg, ok := tokens.Get()
+		if ok {
+			// rewinding in the middle of a CPU instruction requires the input loop
+			// to be unwound before continuing
+			dbg.restartInputLoop(func() error {
+				// adjust gui state for rewinding event. put back into a suitable
+				// state afterwards.
+				dbg.scr.SetFeature(gui.ReqState, gui.StateRewinding)
+				if dbg.runUntilHalt {
+					defer dbg.scr.SetFeature(gui.ReqState, gui.StateRunning)
+				} else {
+					defer dbg.scr.SetFeature(gui.ReqState, gui.StatePaused)
+				}
+
+				if arg == "LAST" {
+					dbg.Rewind.GotoLast()
+				} else if arg == "SUMMARY" {
+					dbg.printLine(terminal.StyleInstrument, dbg.Rewind.String())
+				} else {
+					frame, _ := strconv.Atoi(arg)
+					err := dbg.Rewind.GotoFrame(frame)
+					if err != nil {
+						return err
+					}
+					frame = dbg.VCS.TV.GetState(signal.ReqFramenum)
+					dbg.printLine(terminal.StyleFeedback, fmt.Sprintf("rewind set to frame %d", frame))
+				}
+				return nil
+			})
 		}
 
 	case cmdInsert:
 		cart, _ := tokens.Get()
-		err := dbg.loadCartridge(cartridgeloader.Loader{Filename: cart})
+		err := dbg.attachCartridge(cartridgeloader.NewLoader(cart, "AUTO"))
 		if err != nil {
-			return false, err
+			return err
 		}
 		dbg.printLine(terminal.StyleFeedback, "machine reset with new cartridge (%s)", cart)
 
@@ -284,36 +320,76 @@ func (dbg *Debugger) processTokens(tokens *commandline.Tokens) (bool, error) {
 		if ok {
 			switch arg {
 			case "BANK":
-				bank, _ := tokens.Get()
-				if bank == "" {
-					dbg.printLine(
-						terminal.StyleInstrument,
-						fmt.Sprintf("%d", dbg.vcs.Mem.Cart.GetBank(dbg.vcs.CPU.PC.Address())),
-					)
+				dbg.printLine(
+					terminal.StyleInstrument,
+					dbg.VCS.Mem.Cart.MappingSummary(),
+				)
+
+			case "STATIC":
+				// !!TODO: poke/peek static cartridge static data areas
+				if bus := dbg.VCS.Mem.Cart.GetStaticBus(); bus != nil {
+					s := &strings.Builder{}
+					static := bus.GetStatic()
+					if static != nil {
+						for b := 0; b < len(static); b++ {
+							s.WriteString(static[b].Label + "\n")
+							s.WriteString(strings.Repeat("-", len(static[b].Label)))
+							s.WriteString("\n")
+							s.WriteString(hex.Dump(static[b].Data))
+							s.WriteString("\n\n")
+						}
+
+						dbg.printLine(terminal.StyleInstrument, s.String())
+					} else {
+						dbg.printLine(terminal.StyleFeedback, "cartridge has no static data areas")
+					}
 				} else {
-					n, err := strconv.Atoi(bank)
-					if err != nil {
-						return false, errors.New(errors.CommandError, "bank must be numeric")
+					dbg.printLine(terminal.StyleFeedback, "cartridge has no static data areas")
+				}
+			case "REGISTERS":
+				// !!TODO: poke/peek cartridge registers
+				if bus := dbg.VCS.Mem.Cart.GetRegistersBus(); bus != nil {
+					dbg.printLine(terminal.StyleInstrument, bus.GetRegisters().String())
+				} else {
+					dbg.printLine(terminal.StyleFeedback, "cartridge has no registers")
+				}
+
+			case "RAM":
+				// cartridge RAM is accessible through the normal VCS buses so
+				// the normal peek/poke commands will work
+				if bus := dbg.VCS.Mem.Cart.GetRAMbus(); bus != nil {
+					ram := bus.GetRAM()
+					if ram != nil {
+						s := &strings.Builder{}
+						for b := 0; b < len(ram); b++ {
+							s.WriteString(ram[b].Label + "\n")
+							s.WriteString(strings.Repeat("-", len(ram[b].Label)))
+							s.WriteString("\n")
+							s.WriteString(hex.Dump(ram[b].Data))
+							s.WriteString("\n\n")
+						}
+
+						dbg.printLine(terminal.StyleInstrument, s.String())
+					} else {
+						dbg.printLine(terminal.StyleFeedback, "cartridge has no RAM")
 					}
-					err = dbg.vcs.Mem.Cart.SetBank(dbg.vcs.CPU.PC.Address(), n)
-					if err != nil {
-						return false, err
-					}
+				} else {
+					dbg.printLine(terminal.StyleFeedback, "cartridge has no RAM")
 				}
 			}
 		} else {
-			dbg.printInstrument(dbg.vcs.Mem.Cart)
+			dbg.printLine(terminal.StyleInstrument, dbg.VCS.Mem.Cart.String())
 		}
 
 	case cmdPatch:
 		f, _ := tokens.Get()
-		patched, err := patch.CartridgeMemory(dbg.vcs.Mem.Cart, f)
+		patched, err := patch.CartridgeMemory(dbg.VCS.Mem.Cart, f)
 		if err != nil {
 			dbg.printLine(terminal.StyleError, "%v", err)
 			if patched {
 				dbg.printLine(terminal.StyleError, "error during patching. cartridge might be unusable.")
 			}
-			return false, nil
+			return nil
 		}
 		if patched {
 			dbg.printLine(terminal.StyleFeedback, "cartridge patched")
@@ -339,16 +415,24 @@ func (dbg *Debugger) processTokens(tokens *commandline.Tokens) (bool, error) {
 		s := &bytes.Buffer{}
 
 		if bank == -1 {
-			err = dbg.disasm.Write(s, attr)
+			err = dbg.Disasm.Write(s, attr)
 		} else {
-			err = dbg.disasm.WriteBank(s, attr, bank)
+			err = dbg.Disasm.WriteBank(s, attr, bank)
 		}
 
 		if err != nil {
-			return false, err
+			return err
 		}
 
 		dbg.printLine(terminal.StyleFeedback, s.String())
+
+	case cmdLint:
+		output := &strings.Builder{}
+		err := linter.Lint(dbg.Disasm, output)
+		if err != nil {
+			return err
+		}
+		dbg.printLine(terminal.StyleFeedback, output.String())
 
 	case cmdGrep:
 		scope := disassembly.GrepAll
@@ -364,10 +448,10 @@ func (dbg *Debugger) processTokens(tokens *commandline.Tokens) (bool, error) {
 		}
 
 		search, _ := tokens.Get()
-		output := strings.Builder{}
-		err := dbg.disasm.Grep(&output, scope, search, false)
+		output := &strings.Builder{}
+		err := dbg.Disasm.Grep(output, scope, search, false)
 		if err != nil {
-			return false, nil
+			return err
 		}
 		if output.Len() == 0 {
 			dbg.printLine(terminal.StyleError, "%s not found in disassembly", search)
@@ -379,34 +463,32 @@ func (dbg *Debugger) processTokens(tokens *commandline.Tokens) (bool, error) {
 		tok, _ := tokens.Get()
 		switch strings.ToUpper(tok) {
 		case "LIST":
+			fmt.Println(tokens.Remainder())
 			option, ok := tokens.Get()
 			if ok {
 				switch strings.ToUpper(option) {
 				default:
 					// already caught by command line ValidateTokens()
 
-				case "LOCATIONS":
-					dbg.disasm.Symtable.ListLocations(dbg.printStyle(terminal.StyleFeedback))
+				case "LABELS":
+					dbg.Disasm.Symbols.ListLabels(dbg.printStyle(terminal.StyleFeedback))
 
 				case "READ":
-					dbg.disasm.Symtable.ListReadSymbols(dbg.printStyle(terminal.StyleFeedback))
+					dbg.Disasm.Symbols.ListReadSymbols(dbg.printStyle(terminal.StyleFeedback))
 
 				case "WRITE":
-					dbg.disasm.Symtable.ListWriteSymbols(dbg.printStyle(terminal.StyleFeedback))
+					dbg.Disasm.Symbols.ListWriteSymbols(dbg.printStyle(terminal.StyleFeedback))
 				}
 			} else {
-				dbg.disasm.Symtable.ListSymbols(dbg.printStyle(terminal.StyleFeedback))
+				dbg.Disasm.Symbols.ListSymbols(dbg.printStyle(terminal.StyleFeedback))
 			}
 
 		default:
 			symbol := tok
-			table, symbol, address, err := dbg.disasm.Symtable.SearchSymbol(symbol, symbols.UnspecifiedSymTable)
-			if err != nil {
-				if errors.Is(err, errors.SymbolUnknown) {
-					dbg.printLine(terminal.StyleFeedback, "%s -> not found", symbol)
-					return false, nil
-				}
-				return false, err
+			found, table, symbol, address := dbg.Disasm.Symbols.Search(symbol, symbols.UnspecifiedSymTable)
+			if !found {
+				dbg.printLine(terminal.StyleFeedback, "%s -> not found", symbol)
+				return nil
 			}
 
 			option, ok := tokens.Get()
@@ -416,15 +498,10 @@ func (dbg *Debugger) processTokens(tokens *commandline.Tokens) (bool, error) {
 					// already caught by command line ValidateTokens()
 
 				case "ALL", "MIRRORS":
-					dbg.printLine(terminal.StyleFeedback, "%s -> %#04x", symbol, address)
-
-					// find all instances of symbol address in memory space
-					// assumption: the address returned by SearchSymbol is the
-					// first address in the complete list
-					for m := address + 1; m < memorymap.OriginCart; m++ {
+					for m := memorymap.OriginAbsolute; m < memorymap.MemtopAbsolute; m++ {
 						ai := dbg.dbgmem.mapAddress(m, table == symbols.ReadSymTable)
 						if ai.mappedAddress == address {
-							dbg.printLine(terminal.StyleFeedback, "%s (%s) -> %#04x", symbol, table, m)
+							dbg.printLine(terminal.StyleFeedback, "%s -> %#04x", symbol, m)
 						}
 					}
 				}
@@ -438,11 +515,14 @@ func (dbg *Debugger) processTokens(tokens *commandline.Tokens) (bool, error) {
 			if len(dbg.commandOnHalt) == 0 {
 				dbg.printLine(terminal.StyleFeedback, "auto-command on halt: OFF")
 			} else {
+				s := strings.Builder{}
 				for _, c := range dbg.commandOnHalt {
-					dbg.printLine(terminal.StyleFeedback, "auto-command on halt: %s", c)
+					s.WriteString(c.String())
+					s.WriteString("; ")
 				}
+				dbg.printLine(terminal.StyleFeedback, "command on halt: %s", strings.TrimSuffix(s.String(), "; "))
 			}
-			return false, nil
+			return nil
 		}
 
 		var input string
@@ -451,15 +531,15 @@ func (dbg *Debugger) processTokens(tokens *commandline.Tokens) (bool, error) {
 		switch strings.ToUpper(option) {
 		case "OFF":
 			dbg.commandOnHalt = dbg.commandOnHalt[:0]
-			dbg.printLine(terminal.StyleFeedback, "auto-command on halt: OFF")
-			return false, nil
+			dbg.printLine(terminal.StyleFeedback, "no command on halt")
+			return nil
 
 		case "ON":
 			dbg.commandOnHalt = dbg.commandOnHaltStored
 			for _, c := range dbg.commandOnHalt {
 				dbg.printLine(terminal.StyleFeedback, "auto-command on halt: %s", c)
 			}
-			return false, nil
+			return nil
 
 		default:
 			// token isn't one we recognise so push it back onto the token queue
@@ -480,7 +560,7 @@ func (dbg *Debugger) processTokens(tokens *commandline.Tokens) (bool, error) {
 			toks, err := dbg.tokeniseCommand(s, false, false)
 			if err != nil {
 				dbg.commandOnHalt = existingOnHalt
-				return false, err
+				return err
 			}
 			dbg.commandOnHalt = append(dbg.commandOnHalt, toks)
 		}
@@ -489,22 +569,28 @@ func (dbg *Debugger) processTokens(tokens *commandline.Tokens) (bool, error) {
 		dbg.commandOnHaltStored = dbg.commandOnHalt
 
 		// display the new ONHALT command(s)
+		s := strings.Builder{}
 		for _, c := range dbg.commandOnHalt {
-			dbg.printLine(terminal.StyleFeedback, "auto-command on halt: %s", c)
+			s.WriteString(c.String())
+			s.WriteString("; ")
 		}
+		dbg.printLine(terminal.StyleFeedback, "command on halt: %s", strings.TrimSuffix(s.String(), "; "))
 
-		return false, nil
+		return nil
 
 	case cmdOnStep:
 		if tokens.Remaining() == 0 {
 			if len(dbg.commandOnStep) == 0 {
-				dbg.printLine(terminal.StyleFeedback, "auto-command on step: OFF")
+				dbg.printLine(terminal.StyleFeedback, "no command on step")
 			} else {
+				s := strings.Builder{}
 				for _, c := range dbg.commandOnStep {
-					dbg.printLine(terminal.StyleFeedback, "auto-command on step: %s", c)
+					s.WriteString(c.String())
+					s.WriteString("; ")
 				}
+				dbg.printLine(terminal.StyleFeedback, "command on step: %s", strings.TrimSuffix(s.String(), "; "))
 			}
-			return false, nil
+			return nil
 		}
 
 		var input string
@@ -514,14 +600,14 @@ func (dbg *Debugger) processTokens(tokens *commandline.Tokens) (bool, error) {
 		case "OFF":
 			dbg.commandOnStep = dbg.commandOnStep[:0]
 			dbg.printLine(terminal.StyleFeedback, "auto-command on step: OFF")
-			return false, nil
+			return nil
 
 		case "ON":
 			dbg.commandOnStep = dbg.commandOnStepStored
 			for _, c := range dbg.commandOnStep {
 				dbg.printLine(terminal.StyleFeedback, "auto-command on step: %s", c)
 			}
-			return false, nil
+			return nil
 
 		default:
 			// token isn't one we recognise so push it back onto the token queue
@@ -542,106 +628,267 @@ func (dbg *Debugger) processTokens(tokens *commandline.Tokens) (bool, error) {
 			toks, err := dbg.tokeniseCommand(s, false, false)
 			if err != nil {
 				dbg.commandOnStep = existingOnStep
-				return false, err
+				return err
 			}
 			dbg.commandOnStep = append(dbg.commandOnStep, toks)
 		}
 
-		// make a copy of
+		// store new commandOnStep
 		dbg.commandOnStepStored = dbg.commandOnStep
 
 		// display the new ONSTEP command(s)
+		s := strings.Builder{}
 		for _, c := range dbg.commandOnStep {
-			dbg.printLine(terminal.StyleFeedback, "auto-command on step: %s", c)
+			s.WriteString(c.String())
+			s.WriteString("; ")
+		}
+		dbg.printLine(terminal.StyleFeedback, "command on step: %s", strings.TrimSuffix(s.String(), "; "))
+
+		return nil
+
+	case cmdOnTrace:
+		if tokens.Remaining() == 0 {
+			if len(dbg.commandOnTrace) == 0 {
+				dbg.printLine(terminal.StyleFeedback, "no command on trace")
+			} else {
+				s := strings.Builder{}
+				for _, c := range dbg.commandOnTrace {
+					s.WriteString(c.String())
+					s.WriteString("; ")
+				}
+				dbg.printLine(terminal.StyleFeedback, "command on trace: %s", strings.TrimSuffix(s.String(), "; "))
+			}
+			return nil
 		}
 
-		return false, nil
+		var input string
+
+		option, _ := tokens.Get()
+		switch strings.ToUpper(option) {
+		case "OFF":
+			dbg.commandOnTrace = dbg.commandOnTrace[:0]
+			dbg.printLine(terminal.StyleFeedback, "auto-command on trace: OFF")
+			return nil
+
+		case "ON":
+			dbg.commandOnTrace = dbg.commandOnTraceStored
+			for _, c := range dbg.commandOnTrace {
+				dbg.printLine(terminal.StyleFeedback, "auto-command on trace: %s", c)
+			}
+			return nil
+
+		default:
+			// token isn't one we recognise so push it back onto the token queue
+			tokens.Unget()
+
+			// use remaininder of command line to form the ONTRACE command sequence
+			input = strings.TrimSpace(tokens.Remainder())
+			tokens.End()
+		}
+
+		// empty list of tokens. taking note of existing command
+		existingOnTrace := dbg.commandOnTrace
+		dbg.commandOnTrace = dbg.commandOnTrace[:0]
+
+		// tokenise commands to check for integrity
+		for _, s := range strings.Split(input, ",") {
+			toks, err := dbg.tokeniseCommand(s, false, false)
+			if err != nil {
+				dbg.commandOnTrace = existingOnTrace
+				return err
+			}
+			dbg.commandOnTrace = append(dbg.commandOnTrace, toks)
+			fmt.Println(toks)
+		}
+
+		// store new commandOnTrace
+		dbg.commandOnTraceStored = dbg.commandOnTrace
+
+		// display the new ONTRACE command(s)
+		s := strings.Builder{}
+		for _, c := range dbg.commandOnTrace {
+			s.WriteString(c.String())
+			s.WriteString("; ")
+		}
+		dbg.printLine(terminal.StyleFeedback, "command on trace: %s", strings.TrimSuffix(s.String(), "; "))
+
+		return nil
 
 	case cmdLast:
-		s := strings.Builder{}
+		if dbg.lastResult == nil || dbg.lastResult.Result.Defn == nil {
+			dbg.printLine(terminal.StyleFeedback, "no instruction decoded yet")
+			return nil
+		}
 
-		e, err := dbg.disasm.FormatResult(dbg.lastBank,
-			dbg.vcs.CPU.LastResult,
-			disassembly.EntryLevelDecoded)
-		if err != nil {
-			return false, err
-		}
-		if e == nil {
-			return false, nil
-		}
+		// whether to show bytecode
+		bytecode := false
 
 		option, ok := tokens.Get()
 		if ok {
 			switch strings.ToUpper(option) {
 			case "DEFN":
-				if dbg.vcs.CPU.LastResult.Defn == nil {
+				if dbg.VCS.CPU.LastResult.Defn == nil {
 					dbg.printLine(terminal.StyleFeedback, "no instruction decoded yet")
 				} else {
-					dbg.printLine(terminal.StyleFeedback, "%s", dbg.vcs.CPU.LastResult.Defn)
+					dbg.printLine(terminal.StyleFeedback, "%s", dbg.VCS.CPU.LastResult.Defn)
 				}
-				return false, nil
+				return nil
 
 			case "BYTECODE":
-				s.WriteString(dbg.disasm.GetField(disassembly.FldBytecode, e))
+				bytecode = true
 			}
 		}
 
-		if dbg.vcs.Mem.Cart.NumBanks() > 1 {
-			s.WriteString(fmt.Sprintf("[%s] ", e.BankDecorated))
-		}
-		s.WriteString(dbg.disasm.GetField(disassembly.FldAddress, e))
-		s.WriteString(" ")
-		s.WriteString(dbg.disasm.GetField(disassembly.FldMnemonic, e))
-		s.WriteString(" ")
-		s.WriteString(dbg.disasm.GetField(disassembly.FldOperand, e))
-		s.WriteString(" ")
-		s.WriteString(dbg.disasm.GetField(disassembly.FldActualCycles, e))
-		s.WriteString(" ")
-		s.WriteString(dbg.disasm.GetField(disassembly.FldActualNotes, e))
+		s := strings.Builder{}
 
-		if dbg.vcs.CPU.LastResult.Final {
+		if dbg.VCS.Mem.Cart.NumBanks() > 1 {
+			s.WriteString(fmt.Sprintf("[%s] ", dbg.lastResult.Bank))
+		}
+		s.WriteString(dbg.lastResult.GetField(disassembly.FldAddress))
+		s.WriteString(" ")
+		if bytecode {
+			s.WriteString(dbg.lastResult.GetField(disassembly.FldBytecode))
+			s.WriteString(" ")
+		}
+		s.WriteString(dbg.lastResult.GetField(disassembly.FldMnemonic))
+		s.WriteString(" ")
+		s.WriteString(dbg.lastResult.GetField(disassembly.FldOperand))
+		s.WriteString(" ")
+		s.WriteString(dbg.lastResult.GetField(disassembly.FldActualCycles))
+		s.WriteString(" ")
+		if !dbg.lastResult.Result.Final {
+			s.WriteString(fmt.Sprintf("(of %d) ", dbg.lastResult.Result.Defn.Cycles))
+		}
+		s.WriteString(dbg.lastResult.GetField(disassembly.FldActualNotes))
+
+		// change terminal output style depending on condition of last CPU result
+		if dbg.lastResult.Result.Final {
 			dbg.printLine(terminal.StyleCPUStep, s.String())
 		} else {
 			dbg.printLine(terminal.StyleVideoStep, s.String())
 		}
 
 	case cmdMemMap:
-		dbg.printLine(terminal.StyleInstrument, "%v", memorymap.Summary())
+		address, ok := tokens.Get()
+		if ok {
+			// if an address argument has been specified then map the address
+			// in a read and write context and display the information
+
+			// if hasMapped is false after the read/write mappings then the
+			// address could no be resolved and we print an appropriate notice
+			// to the user
+			hasMapped := false
+
+			s := strings.Builder{}
+
+			ai := dbg.dbgmem.mapAddress(address, true)
+			if ai != nil {
+				hasMapped = true
+				s.WriteString("Read:\n")
+				if ai.address != ai.mappedAddress {
+					s.WriteString(fmt.Sprintf("  %#04x maps to %#04x ", ai.address, ai.mappedAddress))
+				} else {
+					s.WriteString(fmt.Sprintf("  %#04x ", ai.address))
+				}
+				s.WriteString(fmt.Sprintf("in area %s\n", ai.area.String()))
+				if ai.addressLabel != "" {
+					s.WriteString(fmt.Sprintf("  labelled as %s\n", ai.addressLabel))
+				}
+			}
+			ai = dbg.dbgmem.mapAddress(address, false)
+			if ai != nil {
+				hasMapped = true
+				s.WriteString("Write:\n")
+				if ai.address != ai.mappedAddress {
+					s.WriteString(fmt.Sprintf("  %#04x maps to %#04x ", ai.address, ai.mappedAddress))
+				} else {
+					s.WriteString(fmt.Sprintf("  %#04x ", ai.address))
+				}
+				s.WriteString(fmt.Sprintf("in area %s\n", ai.area.String()))
+				if ai.addressLabel != "" {
+					s.WriteString(fmt.Sprintf("  labelled as %s\n", ai.addressLabel))
+				}
+			}
+
+			// print results
+			if hasMapped {
+				dbg.printLine(terminal.StyleInstrument, "%s", s.String())
+			} else {
+				dbg.printLine(terminal.StyleFeedback, fmt.Sprintf("%v is not a mappable address", address))
+			}
+		} else {
+			// without an address argument print the memorymap summary table
+			dbg.printLine(terminal.StyleInstrument, "%v", memorymap.Summary())
+		}
 
 	case cmdCPU:
 		action, ok := tokens.Get()
 		if ok {
 			switch strings.ToUpper(action) {
+			case "STATUS":
+				action, ok = tokens.Get()
+				if ok {
+					target, _ := tokens.Get()
+					var targetVal *bool
+					switch target {
+					case "S":
+						targetVal = &dbg.VCS.CPU.Status.Sign
+					case "O":
+						targetVal = &dbg.VCS.CPU.Status.Overflow
+					case "B":
+						targetVal = &dbg.VCS.CPU.Status.Break
+					case "D":
+						targetVal = &dbg.VCS.CPU.Status.DecimalMode
+					case "I":
+						targetVal = &dbg.VCS.CPU.Status.InterruptDisable
+					case "Z":
+						targetVal = &dbg.VCS.CPU.Status.Zero
+					case "C":
+						targetVal = &dbg.VCS.CPU.Status.Carry
+					}
+
+					switch action {
+					case "SET":
+						*targetVal = true
+					case "UNSET":
+						*targetVal = false
+					case "TOGGLE":
+						*targetVal = !*targetVal
+					}
+				} else {
+					dbg.printLine(terminal.StyleInstrument, dbg.VCS.CPU.Status.String())
+				}
+
 			case "SET":
 				target, _ := tokens.Get()
 				value, _ := tokens.Get()
 
 				target = strings.ToUpper(target)
 				if target == "PC" {
-					// program counter can be a 16 bit number
-					v, err := strconv.ParseUint(value, 0, 16)
+					// program counter is a 16 bit number
+					v, err := strconv.ParseUint(value, 16, 16)
 					if err != nil {
-						dbg.printLine(terminal.StyleError, "value must be a positive 16 number")
+						dbg.printLine(terminal.StyleError, "value must be a positive 16 bit number")
 					}
 
-					dbg.vcs.CPU.PC.Load(uint16(v))
+					dbg.VCS.CPU.PC.Load(uint16(v))
 				} else {
 					// 6507 registers are 8 bit
-					v, err := strconv.ParseUint(value, 0, 8)
+					v, err := strconv.ParseUint(value, 16, 8)
 					if err != nil {
-						dbg.printLine(terminal.StyleError, "value must be a positive 8 number")
+						dbg.printLine(terminal.StyleError, "value must be a positive 8 bit number")
 					}
 
 					var reg *registers.Register
 					switch strings.ToUpper(target) {
 					case "A":
-						reg = dbg.vcs.CPU.A
+						reg = &dbg.VCS.CPU.A
 					case "X":
-						reg = dbg.vcs.CPU.X
+						reg = &dbg.VCS.CPU.X
 					case "Y":
-						reg = dbg.vcs.CPU.Y
+						reg = &dbg.VCS.CPU.Y
 					case "SP":
-						reg = dbg.vcs.CPU.SP
+						reg = &dbg.VCS.CPU.SP
 					}
 
 					reg.Load(uint8(v))
@@ -651,7 +898,7 @@ func (dbg *Debugger) processTokens(tokens *commandline.Tokens) (bool, error) {
 				// already caught by command line ValidateTokens()
 			}
 		} else {
-			dbg.printInstrument(dbg.vcs.CPU)
+			dbg.printLine(terminal.StyleInstrument, dbg.VCS.CPU.String())
 		}
 
 	case cmdPeek:
@@ -675,12 +922,16 @@ func (dbg *Debugger) processTokens(tokens *commandline.Tokens) (bool, error) {
 		// get address token
 		a, _ := tokens.Get()
 
-		// convert address
+		// convert address. note that the calls to dbgmem.poke() also call
+		// mapAddress(). the reason we map the address here is because we want
+		// a numeric address that we can iterate with in the for loop below.
+		// simply converting to a number is no good because we want the user to
+		// be able to specify an address by name, so we may as well just call
+		// mapAddress, even if it does seem redundant.
 		ai := dbg.dbgmem.mapAddress(a, false)
 		if ai == nil {
-			// using poke error because hexload is basically the same as poking
-			dbg.printLine(terminal.StyleError, errors.New(errors.UnpokeableAddress, a).Error())
-			return false, nil
+			dbg.printLine(terminal.StyleError, fmt.Sprintf(pokeError, a))
+			return nil
 		}
 		addr := ai.mappedAddress
 
@@ -695,7 +946,6 @@ func (dbg *Debugger) processTokens(tokens *commandline.Tokens) (bool, error) {
 				continue // for loop (without advancing address)
 			}
 
-			// perform individual poke
 			ai, err := dbg.dbgmem.poke(addr, uint8(val))
 			if err != nil {
 				dbg.printLine(terminal.StyleError, "%s", err)
@@ -709,64 +959,24 @@ func (dbg *Debugger) processTokens(tokens *commandline.Tokens) (bool, error) {
 		}
 
 	case cmdRAM:
-		option, ok := tokens.Get()
-		if ok {
-			option = strings.ToUpper(option)
-			switch option {
-			case "CART":
-				cartRAM := dbg.vcs.Mem.Cart.GetRAMinfo()
-				s := &strings.Builder{}
-
-				for b := 0; b < len(cartRAM); b++ {
-					if !cartRAM[b].Active {
-						continue
-					}
-
-					// header for table. assumes that origin address begins at xxx0
-					s.WriteString("        -0 -1 -2 -3 -4 -5 -6 -7 -8 -9 -A -B -C -D -E -F\n")
-					s.WriteString("      ---- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --")
-
-					j := uint16(0)
-					for i := cartRAM[b].ReadOrigin; i <= cartRAM[b].ReadMemtop; i++ {
-						if j%16 == 0 {
-							s.WriteString(fmt.Sprintf("\n%03x- | ", i/16))
-						}
-						d, _ := dbg.vcs.Mem.Read(cartRAM[b].ReadOrigin + j)
-						s.WriteString(fmt.Sprintf("%02x ", d))
-						j++
-					}
-				}
-
-				dbg.printInstrument(s)
-			}
-		} else {
-			dbg.printInstrument(dbg.vcs.Mem.RAM)
-		}
-
-	case cmdTimer:
-		dbg.printInstrument(dbg.vcs.RIOT.Timer)
+		dbg.printLine(terminal.StyleInstrument, dbg.VCS.Mem.RAM.String())
 
 	case cmdTIA:
-		option, ok := tokens.Get()
-		if ok {
-			option = strings.ToUpper(option)
-			switch option {
-			case "DELAYS":
-				// for convience asking for TIA delays also prints delays for
-				// the sprites
-				dbg.printInstrument(dbg.vcs.TIA.Delay)
-				dbg.printInstrument(dbg.vcs.TIA.Video.Player0.Delay)
-				dbg.printInstrument(dbg.vcs.TIA.Video.Player1.Delay)
-				dbg.printInstrument(dbg.vcs.TIA.Video.Missile0.Delay)
-				dbg.printInstrument(dbg.vcs.TIA.Video.Missile1.Delay)
-				dbg.printInstrument(dbg.vcs.TIA.Video.Ball.Delay)
-			}
-		} else {
-			dbg.printInstrument(dbg.vcs.TIA)
+		dbg.printLine(terminal.StyleInstrument, dbg.VCS.TIA.String())
+
+	case cmdRIOT:
+		arg, _ := tokens.Get()
+		switch arg {
+		case "TIMER":
+			dbg.printLine(terminal.StyleInstrument, dbg.VCS.RIOT.Timer.String())
+		case "PORTS":
+			fallthrough
+		default:
+			dbg.printLine(terminal.StyleInstrument, dbg.VCS.RIOT.Ports.String())
 		}
 
 	case cmdAudio:
-		dbg.printInstrument(dbg.vcs.TIA.Audio)
+		dbg.printLine(terminal.StyleInstrument, dbg.VCS.TIA.Audio.String())
 
 	case cmdTV:
 		option, ok := tokens.Get()
@@ -774,12 +984,24 @@ func (dbg *Debugger) processTokens(tokens *commandline.Tokens) (bool, error) {
 			option = strings.ToUpper(option)
 			switch option {
 			case "SPEC":
-				dbg.printLine(terminal.StyleInstrument, dbg.tv.GetSpec().ID)
+				newspec, ok := tokens.Get()
+				if ok {
+					// unknown specifciations already handled by ValidateTokens()
+					err := dbg.tv.SetSpec(newspec)
+					if err != nil {
+						return err
+					}
+				}
+
+				spec := dbg.tv.GetSpec()
+				s := strings.Builder{}
+				s.WriteString(spec.ID)
+				dbg.printLine(terminal.StyleInstrument, s.String())
 			default:
 				// already caught by command line ValidateTokens()
 			}
 		} else {
-			dbg.printInstrument(dbg.tv)
+			dbg.printLine(terminal.StyleInstrument, dbg.tv.String())
 		}
 
 	// information about the machine (sprites, playfield)
@@ -796,14 +1018,14 @@ func (dbg *Debugger) processTokens(tokens *commandline.Tokens) (bool, error) {
 
 		switch plyr {
 		case 0:
-			dbg.printInstrument(dbg.vcs.TIA.Video.Player0)
+			dbg.printLine(terminal.StyleInstrument, dbg.VCS.TIA.Video.Player0.String())
 
 		case 1:
-			dbg.printInstrument(dbg.vcs.TIA.Video.Player1)
+			dbg.printLine(terminal.StyleInstrument, dbg.VCS.TIA.Video.Player1.String())
 
 		default:
-			dbg.printInstrument(dbg.vcs.TIA.Video.Player0)
-			dbg.printInstrument(dbg.vcs.TIA.Video.Player1)
+			dbg.printLine(terminal.StyleInstrument, dbg.VCS.TIA.Video.Player0.String())
+			dbg.printLine(terminal.StyleInstrument, dbg.VCS.TIA.Video.Player1.String())
 		}
 
 	case cmdMissile:
@@ -819,21 +1041,21 @@ func (dbg *Debugger) processTokens(tokens *commandline.Tokens) (bool, error) {
 
 		switch miss {
 		case 0:
-			dbg.printInstrument(dbg.vcs.TIA.Video.Missile0)
+			dbg.printLine(terminal.StyleInstrument, dbg.VCS.TIA.Video.Missile0.String())
 
 		case 1:
-			dbg.printInstrument(dbg.vcs.TIA.Video.Missile1)
+			dbg.printLine(terminal.StyleInstrument, dbg.VCS.TIA.Video.Missile1.String())
 
 		default:
-			dbg.printInstrument(dbg.vcs.TIA.Video.Missile0)
-			dbg.printInstrument(dbg.vcs.TIA.Video.Missile1)
+			dbg.printLine(terminal.StyleInstrument, dbg.VCS.TIA.Video.Missile0.String())
+			dbg.printLine(terminal.StyleInstrument, dbg.VCS.TIA.Video.Missile1.String())
 		}
 
 	case cmdBall:
-		dbg.printInstrument(dbg.vcs.TIA.Video.Ball)
+		dbg.printLine(terminal.StyleInstrument, dbg.VCS.TIA.Video.Ball.String())
 
 	case cmdPlayfield:
-		dbg.printInstrument(dbg.vcs.TIA.Video.Playfield)
+		dbg.printLine(terminal.StyleInstrument, dbg.VCS.TIA.Video.Playfield.String())
 
 	case cmdDisplay:
 		var err error
@@ -850,12 +1072,13 @@ func (dbg *Debugger) processTokens(tokens *commandline.Tokens) (bool, error) {
 		case "SCALE":
 			scl, ok := tokens.Get()
 			if !ok {
-				return false, errors.New(errors.CommandError, fmt.Sprintf("value required for %s %s", cmdDisplay, action))
+				return curated.Errorf("value required for %s %s", cmdDisplay, action)
 			}
 
-			scale, err := strconv.ParseFloat(scl, 32)
+			var scale float64
+			scale, err = strconv.ParseFloat(scl, 32)
 			if err != nil {
-				return false, errors.New(errors.CommandError, fmt.Sprintf("%s %s value not valid (%s)", cmdDisplay, action, scl))
+				return curated.Errorf("%s %s value not valid (%s)", cmdDisplay, action, scl)
 			}
 
 			err = dbg.scr.SetFeature(gui.ReqSetScale, float32(scale))
@@ -872,16 +1095,16 @@ func (dbg *Debugger) processTokens(tokens *commandline.Tokens) (bool, error) {
 				err = dbg.scr.SetFeature(gui.ReqToggleCropping)
 			}
 
-		case "ALT":
+		case "DEBUG":
 			action, _ := tokens.Get()
 			action = strings.ToUpper(action)
 			switch action {
 			case "OFF":
-				err = dbg.scr.SetFeature(gui.ReqSetAltColors, false)
+				err = dbg.scr.SetFeature(gui.ReqSetDbgColors, false)
 			case "ON":
-				err = dbg.scr.SetFeature(gui.ReqSetAltColors, true)
+				err = dbg.scr.SetFeature(gui.ReqSetDbgColors, true)
 			default:
-				err = dbg.scr.SetFeature(gui.ReqToggleAltColors)
+				err = dbg.scr.SetFeature(gui.ReqToggleDbgColors)
 			}
 		case "OVERLAY":
 			action, _ := tokens.Get()
@@ -897,58 +1120,168 @@ func (dbg *Debugger) processTokens(tokens *commandline.Tokens) (bool, error) {
 		default:
 			err = dbg.scr.SetFeature(gui.ReqToggleVisibility)
 			if err != nil {
-				return false, err
+				return err
 			}
 		}
 
 		if err != nil {
-			if errors.Is(err, errors.UnsupportedGUIRequest) {
-				return false, errors.New(errors.CommandError, fmt.Sprintf("display does not support feature %s", action))
+			if curated.Is(err, gui.UnsupportedGuiFeature) {
+				return curated.Errorf("display does not support feature %s", action)
 			}
-			return false, err
+			return err
 		}
+
+	case cmdPlusROM:
+		plusrom, ok := dbg.VCS.Mem.Cart.GetContainer().(*plusrom.PlusROM)
+		if !ok {
+			dbg.printLine(terminal.StyleError, "not a plusrom cartridge")
+			return nil
+		}
+
+		option, _ := tokens.Get()
+
+		switch option {
+		case "NICK":
+			nick, _ := tokens.Get()
+			err := plusrom.Prefs.Nick.Set(nick)
+			if err != nil {
+				return err
+			}
+			err = plusrom.Prefs.Save()
+			if err != nil {
+				return err
+			}
+		case "ID":
+			id, _ := tokens.Get()
+			err := plusrom.Prefs.ID.Set(id)
+			if err != nil {
+				return err
+			}
+			err = plusrom.Prefs.Save()
+			if err != nil {
+				return err
+			}
+		case "HOST":
+			ai := plusrom.CopyAddrInfo()
+			host, _ := tokens.Get()
+			plusrom.SetAddrInfo(host, ai.Path)
+		case "PATH":
+			ai := plusrom.CopyAddrInfo()
+			path, _ := tokens.Get()
+			plusrom.SetAddrInfo(ai.Host, path)
+		default:
+			dbg.printLine(terminal.StyleFeedback, fmt.Sprintf("Nick: %s", plusrom.Prefs.Nick.String()))
+			dbg.printLine(terminal.StyleFeedback, fmt.Sprintf("ID: %s", plusrom.Prefs.ID.String()))
+			ai := plusrom.CopyAddrInfo()
+			dbg.printLine(terminal.StyleFeedback, fmt.Sprintf("Host: %s", ai.Host))
+			dbg.printLine(terminal.StyleFeedback, fmt.Sprintf("Path: %s", ai.Path))
+		}
+
+	case cmdController:
+		player, _ := tokens.Get()
+
+		var id ports.PortID
+		switch player {
+		case "0":
+			id = ports.Player0ID
+		case "1":
+			id = ports.Player1ID
+		}
+
+		var err error
+
+		controller, ok := tokens.Get()
+		if ok {
+			switch strings.ToLower(controller) {
+			case "auto":
+				err = dbg.VCS.RIOT.Ports.AttachPlayer(id, controllers.NewAuto)
+			case "stick":
+				err = dbg.VCS.RIOT.Ports.AttachPlayer(id, controllers.NewStick)
+			case "paddle":
+				err = dbg.VCS.RIOT.Ports.AttachPlayer(id, controllers.NewPaddle)
+			case "keyboard":
+				err = dbg.VCS.RIOT.Ports.AttachPlayer(id, controllers.NewKeyboard)
+			}
+		}
+
+		if err != nil {
+			return curated.Errorf("%v", err)
+		}
+
+		var p ports.Peripheral
+		switch player {
+		case "0":
+			p = dbg.VCS.RIOT.Ports.Player0
+		case "1":
+			p = dbg.VCS.RIOT.Ports.Player1
+		}
+
+		s := strings.Builder{}
+		if _, ok := p.(*controllers.Auto); ok {
+			s.WriteString("[auto] ")
+		}
+		s.WriteString(p.String())
+		dbg.printLine(terminal.StyleInstrument, s.String())
 
 	case cmdPanel:
 		mode, ok := tokens.Get()
 		if !ok {
-			dbg.printInstrument(dbg.vcs.Panel)
-			return false, nil
+			dbg.printLine(terminal.StyleInstrument, dbg.VCS.RIOT.Ports.Panel.String())
+			return nil
 		}
+
+		var err error
 
 		switch strings.ToUpper(mode) {
 		case "TOGGLE":
 			arg, _ := tokens.Get()
 			switch strings.ToUpper(arg) {
 			case "P0":
-				dbg.vcs.Panel.Handle(input.PanelTogglePlayer0Pro, nil)
+				err = dbg.VCS.RIOT.Ports.HandleEvent(ports.PanelID, ports.PanelTogglePlayer0Pro, nil)
 			case "P1":
-				dbg.vcs.Panel.Handle(input.PanelTogglePlayer1Pro, nil)
+				err = dbg.VCS.RIOT.Ports.HandleEvent(ports.PanelID, ports.PanelTogglePlayer1Pro, nil)
 			case "COL":
-				dbg.vcs.Panel.Handle(input.PanelToggleColor, nil)
+				err = dbg.VCS.RIOT.Ports.HandleEvent(ports.PanelID, ports.PanelToggleColor, nil)
 			}
 		case "SET":
 			arg, _ := tokens.Get()
 			switch strings.ToUpper(arg) {
 			case "P0PRO":
-				dbg.vcs.Panel.Handle(input.PanelSetPlayer0Pro, true)
+				err = dbg.VCS.RIOT.Ports.HandleEvent(ports.PanelID, ports.PanelSetPlayer0Pro, true)
 			case "P1PRO":
-				dbg.vcs.Panel.Handle(input.PanelSetPlayer1Pro, true)
+				err = dbg.VCS.RIOT.Ports.HandleEvent(ports.PanelID, ports.PanelSetPlayer1Pro, true)
 			case "P0AM":
-				dbg.vcs.Panel.Handle(input.PanelSetPlayer0Pro, false)
+				err = dbg.VCS.RIOT.Ports.HandleEvent(ports.PanelID, ports.PanelSetPlayer0Pro, false)
 			case "P1AM":
-				dbg.vcs.Panel.Handle(input.PanelSetPlayer1Pro, false)
+				err = dbg.VCS.RIOT.Ports.HandleEvent(ports.PanelID, ports.PanelSetPlayer1Pro, false)
 			case "COL":
-				dbg.vcs.Panel.Handle(input.PanelSetColor, true)
+				err = dbg.VCS.RIOT.Ports.HandleEvent(ports.PanelID, ports.PanelSetColor, true)
 			case "BW":
-				dbg.vcs.Panel.Handle(input.PanelSetColor, false)
+				err = dbg.VCS.RIOT.Ports.HandleEvent(ports.PanelID, ports.PanelSetColor, false)
 			}
-		default:
-			// we shouldn't need this check it should have been caught by the
-			// command line parser
-			// !!TODO: fix template for PANEL command
-			return false, errors.New(errors.CommandError, fmt.Sprintf("unrecognised argument (%s)", mode))
+		case "HOLD":
+			arg, _ := tokens.Get()
+			switch strings.ToUpper(arg) {
+			case "SELECT":
+				err = dbg.VCS.RIOT.Ports.HandleEvent(ports.PanelID, ports.PanelSelect, true)
+			case "RESET":
+				err = dbg.VCS.RIOT.Ports.HandleEvent(ports.PanelID, ports.PanelReset, true)
+			}
+		case "RELEASE":
+			arg, _ := tokens.Get()
+			switch strings.ToUpper(arg) {
+			case "SELECT":
+				err = dbg.VCS.RIOT.Ports.HandleEvent(ports.PanelID, ports.PanelSelect, false)
+			case "RESET":
+				err = dbg.VCS.RIOT.Ports.HandleEvent(ports.PanelID, ports.PanelReset, false)
+			}
 		}
-		dbg.printInstrument(dbg.vcs.Panel)
+
+		if err != nil {
+			return curated.Errorf("%v", err)
+		}
+
+		dbg.printLine(terminal.StyleInstrument, dbg.VCS.RIOT.Ports.Panel.String())
 
 	case cmdStick:
 		var err error
@@ -956,56 +1289,56 @@ func (dbg *Debugger) processTokens(tokens *commandline.Tokens) (bool, error) {
 		stick, _ := tokens.Get()
 		action, _ := tokens.Get()
 
-		var event input.Event
-		var value input.EventData
+		var event ports.Event
+		var value ports.EventData
 
 		switch strings.ToUpper(action) {
 		case "FIRE":
-			event = input.Fire
+			event = ports.Fire
 			value = true
 		case "UP":
-			event = input.Up
+			event = ports.Up
 			value = true
 		case "DOWN":
-			event = input.Down
+			event = ports.Down
 			value = true
 		case "LEFT":
-			event = input.Left
+			event = ports.Left
 			value = true
 		case "RIGHT":
-			event = input.Right
+			event = ports.Right
 			value = true
 
 		case "NOFIRE":
-			event = input.Fire
+			event = ports.Fire
 			value = false
 		case "NOUP":
-			event = input.Up
+			event = ports.Up
 			value = false
 		case "NODOWN":
-			event = input.Down
+			event = ports.Down
 			value = false
 		case "NOLEFT":
-			event = input.Left
+			event = ports.Left
 			value = false
 		case "NORIGHT":
-			event = input.Right
+			event = ports.Right
 			value = false
 		}
 
 		n, _ := strconv.Atoi(stick)
 		switch n {
 		case 0:
-			err = dbg.vcs.HandController0.Handle(event, value)
+			err = dbg.VCS.RIOT.Ports.HandleEvent(ports.Player0ID, event, value)
 		case 1:
-			err = dbg.vcs.HandController1.Handle(event, value)
+			err = dbg.VCS.RIOT.Ports.HandleEvent(ports.Player1ID, event, value)
 		}
 
 		if err != nil {
-			return false, err
+			return err
 		}
 
-	case cmdKeypad:
+	case cmdKeyboard:
 		var err error
 
 		pad, _ := tokens.Get()
@@ -1015,38 +1348,44 @@ func (dbg *Debugger) processTokens(tokens *commandline.Tokens) (bool, error) {
 		switch n {
 		case 0:
 			if strings.ToUpper(key) == "NONE" {
-				err = dbg.vcs.HandController0.Handle(input.KeypadUp, nil)
+				err = dbg.VCS.RIOT.Ports.HandleEvent(ports.Player0ID, ports.KeyboardUp, nil)
 			} else {
-				err = dbg.vcs.HandController0.Handle(input.KeypadDown, rune(key[0]))
+				err = dbg.VCS.RIOT.Ports.HandleEvent(ports.Player0ID, ports.KeyboardDown, rune(key[0]))
 			}
 		case 1:
 			if strings.ToUpper(key) == "NONE" {
-				err = dbg.vcs.HandController1.Handle(input.KeypadUp, nil)
+				err = dbg.VCS.RIOT.Ports.HandleEvent(ports.Player1ID, ports.KeyboardUp, nil)
 			} else {
-				err = dbg.vcs.HandController1.Handle(input.KeypadDown, rune(key[0]))
+				err = dbg.VCS.RIOT.Ports.HandleEvent(ports.Player1ID, ports.KeyboardDown, rune(key[0]))
 			}
 		}
 
 		if err != nil {
-			return false, err
+			return err
 		}
 
 	case cmdBreak:
-		err := dbg.breakpoints.parseBreakpoint(tokens)
+		err := dbg.breakpoints.parseCommand(tokens)
 		if err != nil {
-			return false, errors.New(errors.CommandError, err)
+			return curated.Errorf("%v", err)
 		}
 
 	case cmdTrap:
-		err := dbg.traps.parseTrap(tokens)
+		err := dbg.traps.parseCommand(tokens)
 		if err != nil {
-			return false, errors.New(errors.CommandError, err)
+			return curated.Errorf("%v", err)
 		}
 
 	case cmdWatch:
-		err := dbg.watches.parseWatch(tokens)
+		err := dbg.watches.parseCommand(tokens)
 		if err != nil {
-			return false, errors.New(errors.CommandError, err)
+			return curated.Errorf("%v", err)
+		}
+
+	case cmdTrace:
+		err := dbg.traces.parseCommand(tokens)
+		if err != nil {
+			return curated.Errorf("%v", err)
 		}
 
 	case cmdList:
@@ -1059,10 +1398,13 @@ func (dbg *Debugger) processTokens(tokens *commandline.Tokens) (bool, error) {
 			dbg.traps.list()
 		case "WATCHES":
 			dbg.watches.list()
+		case "TRACES":
+			dbg.traces.list()
 		case "ALL":
 			dbg.breakpoints.list()
 			dbg.traps.list()
 			dbg.watches.list()
+			dbg.traces.list()
 		default:
 			// already caught by command line ValidateTokens()
 		}
@@ -1073,7 +1415,7 @@ func (dbg *Debugger) processTokens(tokens *commandline.Tokens) (bool, error) {
 		s, _ := tokens.Get()
 		num, err := strconv.Atoi(s)
 		if err != nil {
-			return false, errors.New(errors.CommandError, fmt.Sprintf("drop attribute must be a number (%s)", s))
+			return curated.Errorf("drop attribute must be a number (%s)", s)
 		}
 
 		drop = strings.ToUpper(drop)
@@ -1081,21 +1423,27 @@ func (dbg *Debugger) processTokens(tokens *commandline.Tokens) (bool, error) {
 		case "BREAK":
 			err := dbg.breakpoints.drop(num)
 			if err != nil {
-				return false, err
+				return err
 			}
 			dbg.printLine(terminal.StyleFeedback, "breakpoint #%d dropped", num)
 		case "TRAP":
 			err := dbg.traps.drop(num)
 			if err != nil {
-				return false, err
+				return err
 			}
 			dbg.printLine(terminal.StyleFeedback, "trap #%d dropped", num)
 		case "WATCH":
 			err := dbg.watches.drop(num)
 			if err != nil {
-				return false, err
+				return err
 			}
 			dbg.printLine(terminal.StyleFeedback, "watch #%d dropped", num)
+		case "TRACE":
+			err := dbg.traces.drop(num)
+			if err != nil {
+				return err
+			}
+			dbg.printLine(terminal.StyleFeedback, "trace #%d dropped", num)
 		default:
 			// already caught by command line ValidateTokens()
 		}
@@ -1113,16 +1461,165 @@ func (dbg *Debugger) processTokens(tokens *commandline.Tokens) (bool, error) {
 		case "WATCHES":
 			dbg.watches.clear()
 			dbg.printLine(terminal.StyleFeedback, "watches cleared")
+		case "TRACES":
+			dbg.traces.clear()
+			dbg.printLine(terminal.StyleFeedback, "traces cleared")
 		case "ALL":
 			dbg.breakpoints.clear()
 			dbg.traps.clear()
 			dbg.watches.clear()
-			dbg.printLine(terminal.StyleFeedback, "breakpoints, traps and watches cleared")
+			dbg.traces.clear()
+			dbg.printLine(terminal.StyleFeedback, "breakpoints, traps, watches and traces cleared")
 		default:
 			// already caught by command line ValidateTokens()
 		}
 
+	case cmdPrefs:
+		action, ok := tokens.Get()
+
+		if !ok {
+			dbg.printLine(terminal.StyleFeedback, dbg.VCS.Prefs.String())
+			dbg.printLine(terminal.StyleFeedback, dbg.Disasm.Prefs.String())
+			dbg.printLine(terminal.StyleFeedback, dbg.Rewind.Prefs.String())
+			return nil
+		}
+
+		switch action {
+		case "LOAD":
+			err := dbg.VCS.Prefs.Load()
+			if err != nil {
+				return curated.Errorf("%v", err)
+			}
+			err = dbg.Disasm.Prefs.Load()
+			if err != nil {
+				return curated.Errorf("%v", err)
+			}
+			err = dbg.Rewind.Prefs.Load()
+			if err != nil {
+				return curated.Errorf("%v", err)
+			}
+			return nil
+
+		case "SAVE":
+			err := dbg.VCS.Prefs.Save()
+			if err != nil {
+				return curated.Errorf("%v", err)
+			}
+			err = dbg.Disasm.Prefs.Save()
+			if err != nil {
+				return curated.Errorf("%v", err)
+			}
+			err = dbg.Rewind.Prefs.Save()
+			if err != nil {
+				return curated.Errorf("%v", err)
+			}
+			return nil
+
+		case "REWIND":
+			option, _ := tokens.Get()
+			option = strings.ToUpper(option)
+			switch option {
+			case "MAX":
+				arg, _ := tokens.Get()
+				max, _ := strconv.Atoi(arg)
+				return dbg.Rewind.Prefs.MaxEntries.Set(max)
+			case "FREQ":
+				arg, _ := tokens.Get()
+				freq, _ := strconv.Atoi(arg)
+				return dbg.Rewind.Prefs.Freq.Set(freq)
+			}
+			return nil
+		}
+
+		var err error
+
+		option, _ := tokens.Get()
+		option = strings.ToUpper(option)
+		switch option {
+		case "RANDSTART":
+			switch action {
+			case "SET":
+				err = dbg.VCS.Prefs.RandomState.Set(true)
+			case "UNSET":
+				err = dbg.VCS.Prefs.RandomState.Set(false)
+			case "TOGGLE":
+				v := dbg.VCS.Prefs.RandomState.Get().(bool)
+				err = dbg.VCS.Prefs.RandomState.Set(!v)
+			}
+		case "RANDPINS":
+			switch action {
+			case "SET":
+				err = dbg.VCS.Prefs.RandomPins.Set(true)
+			case "UNSET":
+				err = dbg.VCS.Prefs.RandomPins.Set(false)
+			case "TOGGLE":
+				v := dbg.VCS.Prefs.RandomPins.Get().(bool)
+				err = dbg.VCS.Prefs.RandomPins.Set(!v)
+			}
+		case "FXXXMIRROR":
+			switch action {
+			case "SET":
+				err = dbg.Disasm.Prefs.FxxxMirror.Set(true)
+			case "UNSET":
+				err = dbg.Disasm.Prefs.FxxxMirror.Set(false)
+			case "TOGGLE":
+				v := dbg.Disasm.Prefs.FxxxMirror.Get().(bool)
+				err = dbg.Disasm.Prefs.FxxxMirror.Set(!v)
+			}
+		case "SYMBOLS":
+			switch action {
+			case "SET":
+				err = dbg.Disasm.Prefs.Symbols.Set(true)
+			case "UNSET":
+				err = dbg.Disasm.Prefs.Symbols.Set(false)
+			case "TOGGLE":
+				v := dbg.Disasm.Prefs.Symbols.Get().(bool)
+				err = dbg.Disasm.Prefs.Symbols.Set(!v)
+			}
+		}
+
+		if err != nil {
+			return curated.Errorf("%v", err)
+		}
+
+	case cmdLog:
+		option, ok := tokens.Get()
+		if ok {
+			switch option {
+			case "LAST":
+				s := &strings.Builder{}
+				logger.Tail(s, 1)
+				dbg.printLine(terminal.StyleLog, s.String())
+			case "RECENT":
+				s := &strings.Builder{}
+				logger.WriteRecent(s)
+				dbg.printLine(terminal.StyleLog, s.String())
+			case "CLEAR":
+				logger.Clear()
+			}
+		} else {
+			s := &strings.Builder{}
+			logger.Write(s)
+			if s.Len() == 0 {
+				dbg.printLine(terminal.StyleFeedback, "log is empty")
+			} else {
+				dbg.printLine(terminal.StyleLog, s.String())
+			}
+		}
+
+	case cmdMemUsage:
+		var m runtime.MemStats
+		runtime.ReadMemStats(&m)
+
+		s := strings.Builder{}
+
+		s.WriteString(fmt.Sprintf("Alloc = %v MB\n", m.Alloc/1048576))
+		s.WriteString(fmt.Sprintf("  TotalAlloc = %v MB\n", m.TotalAlloc/1048576))
+		s.WriteString(fmt.Sprintf("  Sys = %v MB\n", m.Sys/1048576))
+		s.WriteString(fmt.Sprintf("  NumGC = %v", m.NumGC))
+
+		dbg.printLine(terminal.StyleLog, s.String())
 	}
 
-	return false, nil
+	return nil
 }

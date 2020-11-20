@@ -12,10 +12,6 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package registers
 
@@ -23,7 +19,7 @@ import (
 	"strings"
 )
 
-// StatusRegister is the special purpose register that stores the flags of the CPU
+// StatusRegister is the special purpose register that stores the flags of the CPU.
 type StatusRegister struct {
 	Sign             bool
 	Overflow         bool
@@ -35,12 +31,12 @@ type StatusRegister struct {
 }
 
 // NewStatusRegister is the preferred method of initialisation for the status
-// register
-func NewStatusRegister() *StatusRegister {
-	return &StatusRegister{}
+// register.
+func NewStatusRegister() StatusRegister {
+	return StatusRegister{}
 }
 
-// Label returns the canonical name for the status register
+// Label returns the canonical name for the status register.
 func (sr StatusRegister) Label() string {
 	return "SR"
 }
@@ -90,13 +86,13 @@ func (sr StatusRegister) String() string {
 	return s.String()
 }
 
-// Reset status flags to initial state
+// Reset status flags to initial state.
 func (sr *StatusRegister) Reset() {
 	sr.FromValue(0)
 }
 
 // Value converts the StatusRegister struct into a value suitable for pushing
-// onto the stack
+// onto the stack.
 func (sr StatusRegister) Value() uint8 {
 	var v uint8
 
@@ -130,7 +126,7 @@ func (sr StatusRegister) Value() uint8 {
 }
 
 // FromValue converts an 8 bit integer (taken from the stack, for example) to
-// the StatusRegister struct receiver
+// the StatusRegister struct receiver.
 func (sr *StatusRegister) FromValue(v uint8) {
 	sr.Sign = v&0x80 == 0x80
 	sr.Overflow = v&0x40 == 0x40

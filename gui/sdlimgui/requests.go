@@ -12,98 +12,133 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package sdlimgui
 
 import (
+	"github.com/jetsetilly/gopher2600/curated"
 	"github.com/jetsetilly/gopher2600/debugger"
-	"github.com/jetsetilly/gopher2600/disassembly"
-	"github.com/jetsetilly/gopher2600/errors"
 	"github.com/jetsetilly/gopher2600/gui"
 	"github.com/jetsetilly/gopher2600/hardware"
 )
 
 type featureRequest struct {
 	request gui.FeatureReq
-	args    []interface{}
+	args    []gui.FeatureReqData
 }
 
-// SetFeature implements gui.GUI interface
-func (img *SdlImgui) SetFeature(request gui.FeatureReq, args ...interface{}) (returnedErr error) {
-	img.featureReq <- featureRequest{request: request, args: args}
-	return <-img.featureErr
+// GetFeature implements gui.GUI interface.
+func (img *SdlImgui) GetFeature(request gui.FeatureReq) (gui.FeatureReqData, error) {
+	img.featureGet <- featureRequest{request: request}
+	return <-img.featureGetData, <-img.featureGetErr
+}
+
+// featureRequests have been handed over to the featureGet channel. we service
+// any requests on that channel here.
+func (img *SdlImgui) serviceGetFeature(request featureRequest) {
+	switch request.request {
+	case gui.ReqState:
+		img.featureGetData <- img.state
+		img.featureGetErr <- nil
+	default:
+		img.featureGetData <- nil
+		img.featureGetErr <- curated.Errorf(gui.UnsupportedGuiFeature, request.request)
+	}
+}
+
+// SetFeature implements gui.GUI interface.
+func (img *SdlImgui) SetFeature(request gui.FeatureReq, args ...gui.FeatureReqData) error {
+	img.featureSet <- featureRequest{request: request, args: args}
+	return <-img.featureSetErr
+}
+
+// SetFeatureNoError implements gui.GUI interface.
+func (img *SdlImgui) SetFeatureNoError(request gui.FeatureReq, args ...gui.FeatureReqData) {
+	img.featureSet <- featureRequest{request: request, args: args}
+	go func() {
+		<-img.featureSetErr
+	}()
 }
 
 // featureRequests have been handed over to the featureReq channel. we service
 // any requests on that channel here.
-func (img *SdlImgui) serviceFeatureRequests(request featureRequest) {
-	// lazy (but clear) handling of type assertion errors
-	defer func() {
-		if r := recover(); r != nil {
-			img.featureErr <- errors.New(errors.PanicError, "sdl.SetFeature()", r)
-		}
-	}()
-
+func (img *SdlImgui) serviceSetFeature(request featureRequest) {
 	var err error
 
 	switch request.request {
 	case gui.ReqSetEventChan:
 		img.events = request.args[0].(chan gui.Event)
 
-	case gui.ReqSetVisibleOnStable:
-
 	case gui.ReqSetVisibility:
+		img.wm.dbgScr.setOpen(request.args[0].(bool))
 
 	case gui.ReqToggleVisibility:
+		img.wm.dbgScr.setOpen(!img.wm.dbgScr.isOpen())
 
-	case gui.ReqSetAltColors:
-		img.screen.useAltPixels = request.args[0].(bool)
+	case gui.ReqState:
+		img.setState(request.args[0].(gui.EmulationState))
 
-	case gui.ReqToggleAltColors:
-		img.screen.useAltPixels = !img.screen.useAltPixels
+	case gui.ReqSetDbgColors:
+		img.wm.dbgScr.debugColors = request.args[0].(bool)
+
+	case gui.ReqToggleDbgColors:
+		img.wm.dbgScr.debugColors = !img.wm.dbgScr.debugColors
 
 	case gui.ReqSetCropping:
-		img.screen.setCropping(request.args[0].(bool))
+		img.wm.dbgScr.setCropping(request.args[0].(bool))
 
 	case gui.ReqToggleCropping:
-		img.screen.setCropping(!img.screen.cropped)
+		img.wm.dbgScr.setCropping(!img.wm.dbgScr.cropped)
 
 	case gui.ReqSetOverlay:
+		img.wm.dbgScr.overlay = request.args[0].(bool)
 
 	case gui.ReqToggleOverlay:
+		img.wm.dbgScr.overlay = !img.wm.dbgScr.overlay
+
+	case gui.ReqCRTeffects:
+		img.wm.dbgScr.crt = request.args[0].(bool)
 
 	case gui.ReqIncScale:
-		if img.screen.scaling < 4.0 {
-			img.screen.scaling += 0.1
-		}
+		img.setScale(0.1, true)
 
 	case gui.ReqDecScale:
-		if img.screen.scaling > 0.5 {
-			img.screen.scaling -= 0.1
-		}
+		img.setScale(-0.1, true)
 
 	case gui.ReqSetScale:
-		img.screen.scaling = request.args[0].(float32)
-
-	case gui.ReqSetPause:
-		img.pause(request.args[0].(bool))
-
-	case gui.ReqAddDebugger:
-		img.lazy.Dbg = request.args[0].(*debugger.Debugger)
+		img.setScale(request.args[0].(float32), false)
 
 	case gui.ReqAddVCS:
-		img.lazy.VCS = request.args[0].(*hardware.VCS)
+		img.vcs = request.args[0].(*hardware.VCS)
 
-	case gui.ReqAddDisasm:
-		img.lazy.Dsm = request.args[0].(*disassembly.Disassembly)
+	case gui.ReqAddDebugger:
+		img.lz.Dbg = request.args[0].(*debugger.Debugger)
+		img.vcs = img.lz.Dbg.VCS
+
+	case gui.ReqSetPlaymode:
+		err = img.setPlaymode(request.args[0].(bool))
+
+	case gui.ReqSavePrefs:
+		err = img.prefs.save()
+		if err == nil {
+			err = img.crtPrefs.Save()
+		}
+
+	case gui.ReqChangingCartridge:
+		// a new cartridge requires us to reset the lazy system (see the
+		// lazyvalues.Reset() function commentary for why)
+		img.lz.Reset(request.args[0].(bool))
+
+	case gui.ReqPlusROMFirstInstallation:
+		img.plusROMFirstInstallation = request.args[0].(*gui.PlusROMFirstInstallation)
 
 	default:
-		err = errors.New(errors.UnsupportedGUIRequest, request)
+		err = curated.Errorf(gui.UnsupportedGuiFeature, request.request)
 	}
 
-	img.featureErr <- err
+	if err == nil {
+		img.featureSetErr <- nil
+	} else {
+		img.featureSetErr <- curated.Errorf("sdlimgui: %v", err)
+	}
 }

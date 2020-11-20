@@ -12,10 +12,6 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package digest
 
@@ -23,18 +19,18 @@ import (
 	"crypto/sha1"
 	"fmt"
 
-	"github.com/jetsetilly/gopher2600/errors"
-	"github.com/jetsetilly/gopher2600/television"
+	"github.com/jetsetilly/gopher2600/curated"
+	"github.com/jetsetilly/gopher2600/hardware/television"
 )
 
 // the length of the buffer we're using isn't really important. that said, it
-// needs to be at least sha1.Size bytes in length
+// needs to be at least sha1.Size bytes in length.
 const audioBufferLength = 1024 + sha1.Size
 
 // to allow us to create digests on audio streams longer than
 // audioBufferLength, we'll stuff the previous digest value into the first part
 // of the buffer array and make sure we include it when we create the next
-// digest value
+// digest value.
 const audioBufferStart = sha1.Size
 
 // Audio is an implementation of the television.AudioMixer interface with an
@@ -44,14 +40,14 @@ const audioBufferStart = sha1.Size
 // Note that the use of SHA-1 is fine for this application because this is not a
 // cryptographic task.
 type Audio struct {
-	television.Television
+	*television.Television
 	digest   [sha1.Size]byte
 	buffer   []uint8
 	bufferCt int
 }
 
-// NewAudio is the preferred method of initialisation for the Audio2Wav type
-func NewAudio(tv television.Television) (*Audio, error) {
+// NewAudio is the preferred method of initialisation for the Audio2Wav type.
+func NewAudio(tv *television.Television) (*Audio, error) {
 	dig := &Audio{Television: tv}
 
 	// register ourselves as a television.AudioMixer
@@ -64,19 +60,19 @@ func NewAudio(tv television.Television) (*Audio, error) {
 	return dig, nil
 }
 
-// Hash implements digest.Digest interface
+// Hash implements digest.Digest interface.
 func (dig Audio) Hash() string {
 	return fmt.Sprintf("%x", dig.digest)
 }
 
-// ResetDigest implements digest.Digest interface
+// ResetDigest implements digest.Digest interface.
 func (dig *Audio) ResetDigest() {
 	for i := range dig.digest {
 		dig.digest[i] = 0
 	}
 }
 
-// SetAudio implements the television.AudioMixer interface
+// SetAudio implements the television.AudioMixer interface.
 func (dig *Audio) SetAudio(audioData uint8) error {
 	dig.buffer[dig.bufferCt] = audioData
 
@@ -93,13 +89,13 @@ func (dig *Audio) flushAudio() error {
 	dig.digest = sha1.Sum(dig.buffer)
 	n := copy(dig.buffer, dig.digest[:])
 	if n != len(dig.digest) {
-		return errors.New(errors.AudioDigest, fmt.Sprintf("digest error while flushing audio stream"))
+		return curated.Errorf("digest: audio: digest error while flushing audio stream")
 	}
 	dig.bufferCt = audioBufferStart
 	return nil
 }
 
-// EndMixing implements the television.AudioMixer interface
+// EndMixing implements the television.AudioMixer interface.
 func (dig *Audio) EndMixing() error {
 	return nil
 }

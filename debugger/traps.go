@@ -12,10 +12,6 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 // traps are used to halt execution of the emulator when the target *changes*
 // from its current value to any other value. compare to breakpoints which halt
@@ -27,9 +23,9 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/jetsetilly/gopher2600/curated"
 	"github.com/jetsetilly/gopher2600/debugger/terminal"
 	"github.com/jetsetilly/gopher2600/debugger/terminal/commandline"
-	"github.com/jetsetilly/gopher2600/errors"
 )
 
 type traps struct {
@@ -46,22 +42,27 @@ func (tr trapper) String() string {
 	return tr.target.Label()
 }
 
-// newTraps is the preferred method of initialisation for the traps type
+// newTraps is the preferred method of initialisation for the traps type.
 func newTraps(dbg *Debugger) *traps {
 	tr := &traps{dbg: dbg}
 	tr.clear()
 	return tr
 }
 
-// clear all traps
+// clear all traps.
 func (tr *traps) clear() {
 	tr.traps = make([]trapper, 0, 10)
 }
 
-// drop the numbered trap from the list
+// isEmpty returns true if there are no currently defined traps.
+func (tr *traps) isEmpty() bool {
+	return len(tr.traps) == 0
+}
+
+// drop the numbered trap from the list.
 func (tr *traps) drop(num int) error {
 	if len(tr.traps)-1 < num {
-		return errors.New(errors.CommandError, fmt.Sprintf("trap #%d is not defined", num))
+		return curated.Errorf("trap #%d is not defined", num)
 	}
 
 	h := tr.traps[:num]
@@ -74,8 +75,12 @@ func (tr *traps) drop(num int) error {
 }
 
 // check compares the current state of the emulation with every trap condition.
-// returns a string listing every condition that matches (separated by \n)
+// returns a string listing every condition that matches (separated by \n).
 func (tr *traps) check(previousResult string) string {
+	if len(tr.traps) == 0 {
+		return previousResult
+	}
+
 	checkString := strings.Builder{}
 	checkString.WriteString(previousResult)
 	for i := range tr.traps {
@@ -89,7 +94,7 @@ func (tr *traps) check(previousResult string) string {
 	return checkString.String()
 }
 
-// list currently defined traps
+// list currently defined traps.
 func (tr traps) list() {
 	if len(tr.traps) == 0 {
 		tr.dbg.printLine(terminal.StyleFeedback, "no traps")
@@ -101,8 +106,8 @@ func (tr traps) list() {
 	}
 }
 
-// parse tokens and add new trap
-func (tr *traps) parseTrap(tokens *commandline.Tokens) error {
+// parse tokens and add new trap.
+func (tr *traps) parseCommand(tokens *commandline.Tokens) error {
 	_, present := tokens.Peek()
 	for present {
 		tgt, err := parseTarget(tr.dbg, tokens)

@@ -12,10 +12,6 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package registers
 
@@ -45,12 +41,12 @@ func (r *Register) AddDecimal(val uint8, carry bool) (bool, bool, bool, bool) {
 	var ucarry, tcarry bool
 
 	// binary addition of units and tens
-	runits := uint8(r.value) & 0x0f
-	vunits := uint8(val) & 0x0f
+	runits := r.value & 0x0f
+	vunits := val & 0x0f
 	runits, ucarry = addDecimal(runits, vunits, carry)
 
-	rtens := (uint8(r.value) & 0xf0) >> 4
-	vtens := (uint8(val) & 0xf0) >> 4
+	rtens := (r.value & 0xf0) >> 4
+	vtens := (val & 0xf0) >> 4
 	rtens, tcarry = addDecimal(rtens, vtens, ucarry)
 
 	// from the Cwik document:
@@ -111,10 +107,25 @@ func (r *Register) SubtractDecimal(val uint8, carry bool) (bool, bool, bool, boo
 	vtens := (val & 0xf0) >> 4
 	rtens, tcarry = subtractDecimal(rtens, vtens, ucarry)
 
+	// from the Cwik document:
+	//
+	// "The Z flag is computed before performing any decimal adjust."
+	zero = runits == 0x00 && rtens == 0x00
+
 	// decimal correction for units
 	if ucarry {
 		runits += 10
 	}
+
+	// from the Cwik document:
+	//
+	// "The N and V flags are computed after a decimal adjust of the low
+	// nibble, but before adjusting the high nibble."
+	//
+	// not forgetting that the tens value has not been shifted into the upper
+	// nibble yet
+	overflow = rtens&0x04 == 0x04
+	sign = rtens&0x08 == 0x08
 
 	// decimal correction for tens
 	if tcarry {

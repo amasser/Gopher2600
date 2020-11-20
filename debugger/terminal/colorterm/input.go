@@ -12,27 +12,24 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
+
+// +build !windows
 
 package colorterm
 
 import (
-	"fmt"
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/jetsetilly/gopher2600/ansi"
+	"github.com/jetsetilly/gopher2600/curated"
 	"github.com/jetsetilly/gopher2600/debugger/terminal"
 	"github.com/jetsetilly/gopher2600/debugger/terminal/colorterm/easyterm"
-	"github.com/jetsetilly/gopher2600/errors"
+	"github.com/jetsetilly/gopher2600/debugger/terminal/colorterm/easyterm/ansi"
 )
 
 // #cursor #keys #tab #completion
 
-// TermRead implements the terminal.Input interface
+// TermRead implements the terminal.Input interface.
 func (ct *ColorTerminal) TermRead(input []byte, prompt terminal.Prompt, events *terminal.ReadEvents) (int, error) {
 	if ct.silenced {
 		return 0, nil
@@ -45,7 +42,10 @@ func (ct *ColorTerminal) TermRead(input []byte, prompt terminal.Prompt, events *
 	// we need to put terminal into raw mode so that we can monkey with it.
 	// not that this means that we need to handle control codes manually,
 	// easyterm.KeyInterrupt and easyterm.KeySuspend in particular.
-	ct.RawMode()
+	err := ct.RawMode()
+	if err != nil {
+		return 0, curated.Errorf("colorterm", err)
+	}
 	defer ct.CanonicalMode()
 
 	// er is used to store encoded runes (length of 4 should be enough)
@@ -72,25 +72,41 @@ func (ct *ColorTerminal) TermRead(input []byte, prompt terminal.Prompt, events *
 	// for this to work we need to place the cursor in it's initial position
 	// before we begin the loop
 	ct.EasyTerm.TermPrint("\r")
-	ct.EasyTerm.TermPrint(ansi.CursorMove(len(prompt.Content)))
+	ct.EasyTerm.TermPrint(ansi.CursorMove(len(prompt.String())))
 
 	for {
 		// print prompt and what we have of the user input
 		ct.EasyTerm.TermPrint(ansi.CursorStore)
-		ct.TermPrintLine(prompt.Style, fmt.Sprintf("%s%s", ansi.ClearLine, prompt.Content))
+		ct.EasyTerm.TermPrint(ansi.ClearLine)
+		ct.EasyTerm.TermPrint("\r")
+
+		// style prompt
+		switch prompt.Type {
+		case terminal.PromptTypeCPUStep:
+			ct.EasyTerm.TermPrint(ansi.PenStyles["bold"])
+		case terminal.PromptTypeVideoStep:
+			// no styling
+		case terminal.PromptTypeConfirm:
+			ct.EasyTerm.TermPrint(ansi.PenStyles["bold"])
+			ct.EasyTerm.TermPrint(ansi.Pens["blue"])
+		}
+
+		ct.EasyTerm.TermPrint(prompt.String())
+		ct.EasyTerm.TermPrint(ansi.NormalPen)
 		ct.EasyTerm.TermPrint(string(input[:inputLen]))
 		ct.EasyTerm.TermPrint(ansi.CursorRestore)
 
+		// wait for an event and respond
 		select {
-		case _ = <-events.IntEvents:
-			// terminal is in raw mode so we won't recieve these from the
+		case <-events.IntEvents:
+			// terminal is in raw mode so we won't receive these from the
 			// terminal itself but I suppose it's possible to receive them
 			// from somewhere else
 			//
 			// just return the UserInterrupt error and not worry about clearing
 			// the input line. see easyterm.KeyInterrupt for what happens
 			// normally.
-			return 0, errors.New(errors.UserInterrupt)
+			return 0, curated.Errorf(terminal.UserInterrupt)
 
 		case ev := <-events.GuiEvents:
 			// handle functions that are passsed on over interruptChannel. these can
@@ -123,13 +139,19 @@ func (ct *ColorTerminal) TermRead(input []byte, prompt terminal.Prompt, events *
 				} else {
 					// there is no input so return UserInterrupt error
 					ct.EasyTerm.TermPrint("\r\n")
-					return 0, errors.New(errors.UserInterrupt)
+					return 0, curated.Errorf(terminal.UserInterrupt)
 				}
 
 			case easyterm.KeySuspend:
-				ct.CanonicalMode()
+				err := ct.CanonicalMode()
+				if err != nil {
+					return 0, curated.Errorf("colorterm", err)
+				}
 				easyterm.SuspendProcess()
-				ct.RawMode()
+				err = ct.RawMode()
+				if err != nil {
+					return 0, curated.Errorf("colorterm", err)
+				}
 
 			case easyterm.KeyTab:
 				if ct.tabCompletion != nil {
@@ -143,7 +165,7 @@ func (ct *ColorTerminal) TermRead(input []byte, prompt terminal.Prompt, events *
 						// append everything after the cursor to the new string and copy
 						// into input array
 						s += string(input[cursorPos:])
-						copy(input, []byte(s))
+						copy(input, s)
 
 						// advance character to end of completed word
 						ct.EasyTerm.TermPrint(ansi.CursorMove(d))
@@ -300,7 +322,6 @@ func (ct *ColorTerminal) TermRead(input []byte, prompt terminal.Prompt, events *
 
 			default:
 				if unicode.IsDigit(readRune.r) || unicode.IsLetter(readRune.r) || unicode.IsSpace(readRune.r) || unicode.IsPunct(readRune.r) || unicode.IsSymbol(readRune.r) {
-
 					l := utf8.EncodeRune(er, readRune.r)
 
 					// make sure we don't overflow the input buffer
@@ -325,7 +346,7 @@ func (ct *ColorTerminal) TermRead(input []byte, prompt terminal.Prompt, events *
 	}
 }
 
-// TermReadCheck implements the terminal.Input interface
+// TermReadCheck implements the terminal.Input interface.
 func (ct *ColorTerminal) TermReadCheck() bool {
 	return false
 }

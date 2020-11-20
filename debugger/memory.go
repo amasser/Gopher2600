@@ -12,10 +12,6 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package debugger
 
@@ -24,23 +20,24 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/jetsetilly/gopher2600/errors"
-	"github.com/jetsetilly/gopher2600/hardware/memory"
+	"github.com/jetsetilly/gopher2600/curated"
+	"github.com/jetsetilly/gopher2600/hardware"
+	"github.com/jetsetilly/gopher2600/hardware/memory/bus"
 	"github.com/jetsetilly/gopher2600/hardware/memory/memorymap"
 	"github.com/jetsetilly/gopher2600/symbols"
 )
 
 // memoryDebug is a front-end to the real VCS memory. it allows addressing by
-// symbol name and uses the addressInfo type for easier presentation
+// symbol name and uses the addressInfo type for easier presentation.
 type memoryDebug struct {
-	mem      *memory.VCSMemory
-	symtable *symbols.Table
+	vcs     *hardware.VCS
+	symbols *symbols.Symbols
 }
 
 // memoryDebug functions all return an instance of addressInfo. this struct
 // contains everything you could possibly usefully know about an address. most
 // usefully perhaps, the String() function provides a normalised presentation
-// of information
+// of information.
 type addressInfo struct {
 	address       uint16
 	mappedAddress uint16
@@ -78,16 +75,16 @@ func (ai addressInfo) String() string {
 	return s.String()
 }
 
-// mapAddress allows addressing by symbols in addition to numerically
+// mapAddress allows addressing by symbols in addition to numerically.
 func (dbgmem memoryDebug) mapAddress(address interface{}, read bool) *addressInfo {
 	ai := &addressInfo{read: read}
 
 	var symbolTable map[uint16]string
 
 	if read {
-		symbolTable = (dbgmem.symtable).Read.Symbols
+		symbolTable = (dbgmem.symbols).Read.Entries
 	} else {
-		symbolTable = (dbgmem.symtable).Write.Symbols
+		symbolTable = (dbgmem.symbols).Write.Entries
 	}
 
 	switch address := address.(type) {
@@ -133,6 +130,8 @@ func (dbgmem memoryDebug) mapAddress(address interface{}, read bool) *addressInf
 			ai.address = uint16(addr)
 			ai.mappedAddress, ai.area = memorymap.MapAddress(ai.address, read)
 		}
+	default:
+		panic(fmt.Sprintf("unsupported address type (%T)", address))
 	}
 
 	ai.addressLabel = symbolTable[ai.mappedAddress]
@@ -140,27 +139,34 @@ func (dbgmem memoryDebug) mapAddress(address interface{}, read bool) *addressInf
 	return ai
 }
 
+// poke/peek error formatting, for consistency.
+const (
+	pokeError = "cannot poke address (%v)"
+	peekError = "cannot peek address (%v)"
+)
+
 // Peek returns the contents of the memory address, without triggering any side
 // effects. address can be expressed numerically or symbolically.
 func (dbgmem memoryDebug) peek(address interface{}) (*addressInfo, error) {
 	ai := dbgmem.mapAddress(address, true)
 	if ai == nil {
-		return nil, errors.New(errors.DebuggerError, errors.New(errors.UnpeekableAddress, address))
+		return nil, curated.Errorf(peekError, address)
 	}
 
-	ar, err := dbgmem.mem.GetArea(ai.area)
-	if err != nil {
-		return nil, errors.New(errors.DebuggerError, err)
-	}
+	area := dbgmem.vcs.Mem.GetArea(ai.area)
 
-	ai.data, err = ar.Peek(ai.mappedAddress)
+	var err error
+	ai.data, err = area.Peek(ai.mappedAddress)
 	if err != nil {
-		return nil, errors.New(errors.DebuggerError, err)
+		if curated.Is(err, bus.AddressError) {
+			return nil, curated.Errorf(peekError, address)
+		}
+		return nil, err
 	}
 
 	ai.peeked = true
 
-	return ai, err
+	return ai, nil
 }
 
 // Poke writes a value at the specified address, which may be numeric or
@@ -168,17 +174,17 @@ func (dbgmem memoryDebug) peek(address interface{}) (*addressInfo, error) {
 func (dbgmem memoryDebug) poke(address interface{}, data uint8) (*addressInfo, error) {
 	ai := dbgmem.mapAddress(address, false)
 	if ai == nil {
-		return nil, errors.New(errors.DebuggerError, errors.New(errors.UnpokeableAddress, address))
+		return nil, curated.Errorf(pokeError, address)
 	}
 
-	ar, err := dbgmem.mem.GetArea(ai.area)
-	if err != nil {
-		return nil, errors.New(errors.DebuggerError, err)
-	}
+	area := dbgmem.vcs.Mem.GetArea(ai.area)
 
-	err = ar.Poke(ai.mappedAddress, data)
+	err := area.Poke(ai.mappedAddress, data)
 	if err != nil {
-		return nil, errors.New(errors.DebuggerError, err)
+		if curated.Is(err, bus.AddressError) {
+			return nil, curated.Errorf(pokeError, address)
+		}
+		return nil, err
 	}
 
 	ai.data = data

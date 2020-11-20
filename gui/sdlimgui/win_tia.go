@@ -12,10 +12,6 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package sdlimgui
 
@@ -29,13 +25,13 @@ const winTIATitle = "TIA"
 
 type winTIA struct {
 	windowManagement
+
 	img          *SdlImgui
 	popupPalette *popupPalette
 
 	strobe int32
 
 	// widget dimensions
-	byteDim                     imgui.Vec2
 	hmoveSliderWidth            float32
 	ballSizeComboDim            imgui.Vec2
 	playerSizeAndCopiesComboDim imgui.Vec2
@@ -58,7 +54,6 @@ func newWinTIA(img *SdlImgui) (managedWindow, error) {
 }
 
 func (win *winTIA) init() {
-	win.byteDim = imguiGetFrameDim("FF")
 	win.hmoveSliderWidth = imgui.FontSize() * 16
 	win.ballSizeComboDim = imguiGetFrameDim("", video.BallSizes...)
 	win.playerSizeAndCopiesComboDim = imguiGetFrameDim("", video.PlayerSizes...)
@@ -74,13 +69,13 @@ func (win *winTIA) id() string {
 	return winTIATitle
 }
 
-// draw is called by service loop
+// draw is called by service loop.
 func (win *winTIA) draw() {
 	if !win.open {
 		return
 	}
 
-	imgui.SetNextWindowPosV(imgui.Vec2{X: 9, Y: 510}, imgui.ConditionFirstUseEver, imgui.Vec2{X: 0, Y: 0})
+	imgui.SetNextWindowPosV(imgui.Vec2{X: 31, Y: 512}, imgui.ConditionFirstUseEver, imgui.Vec2{X: 0, Y: 0})
 	imgui.SetNextWindowSizeV(imgui.Vec2{X: 558, Y: 201}, imgui.ConditionFirstUseEver)
 	imgui.BeginV(winTIATitle, &win.open, 0)
 

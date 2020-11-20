@@ -12,10 +12,6 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package addresses
 
@@ -60,7 +56,7 @@ package addresses
 // matter but some ROMs do make use of the extra bits, and so we must account
 // for it in emulation.
 //
-// It's worth noting that the above is implicitely talking about zero-page
+// It's worth noting that the above is implicitly talking about zero-page
 // addressing; but masking also occurs with regular two-byte addressing. The
 // key to understanding is that the masking is applied to the most recent byte
 // of the address to be put on the address bus*. In all cases, this is the

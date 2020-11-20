@@ -12,10 +12,6 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package debugger
 
@@ -24,81 +20,52 @@ import (
 	"strings"
 
 	"github.com/jetsetilly/gopher2600/debugger/terminal"
-	"github.com/jetsetilly/gopher2600/hardware/memory/memorymap"
+	"github.com/jetsetilly/gopher2600/disassembly"
 )
 
-func (dbg *Debugger) buildPrompt(videoCycle bool) terminal.Prompt {
+func (dbg *Debugger) buildPrompt() terminal.Prompt {
+	content := strings.Builder{}
+
+	var e *disassembly.Entry
+
 	// decide which address value to use
-	var addr uint16
-	var bank int
-
-	//  if last result was final or if address of last result is zero then
-	//  print the PC address. the second part of the condition catches a newly
-	//  reset CPU.
-	if dbg.vcs.CPU.LastResult.Final || dbg.vcs.CPU.HasReset() {
-		addr = dbg.vcs.CPU.PC.Address()
+	if dbg.VCS.CPU.LastResult.Final || dbg.VCS.CPU.HasReset() {
+		e = dbg.Disasm.GetEntryByAddress(dbg.VCS.CPU.PC.Address())
 	} else {
-		// if we're in the middle of an instruction then use the
-		// addresss in lastResult - in video-stepping mode we want the
-		// prompt to report the instruction that we're working on, not
-		// the next one to be stepped into.
-		addr = dbg.vcs.CPU.LastResult.Address
+		// if we're in the middle of an instruction then use the addresss in
+		// lastResult. in these instances we want the prompt to report the
+		// instruction that the CPU is working on, not the next one to be
+		// stepped into.
+		e = dbg.lastResult
 	}
 
-	bank = dbg.vcs.Mem.Cart.GetBank(addr)
-
-	prompt := strings.Builder{}
-	prompt.WriteString("[")
-
-	if dbg.scriptScribe.IsActive() {
-		prompt.WriteString("(rec)")
-	}
-
-	// build prompt depending on address and whether a disassembly is available
-	if !memorymap.IsArea(addr, memorymap.Cartridge) {
-		// prompt address doesn't seem to be pointing to the cartridge, prepare
-		// "non-cart" prompt
-		prompt.WriteString(fmt.Sprintf(" %#04x non-cart space ]", addr))
-	} else if d, ok := dbg.disasm.GetEntryByAddress(bank, addr); ok {
-		// because we're using the raw disassmebly the reported address
-		// in that disassembly may be misleading.
-		prompt.WriteString(fmt.Sprintf(" %#04x %s", addr, d.Mnemonic))
-		if d.Operand != "" {
-			prompt.WriteString(fmt.Sprintf(" %s", d.Operand))
-		}
-		prompt.WriteString(" ]")
+	// build prompt based on how confident we are of the contents of the
+	// disassembly entry. starting with the condition of no disassembly at all
+	if e == nil {
+		content.WriteString(fmt.Sprintf("$%04x", dbg.VCS.CPU.PC.Address()))
+	} else if e.Level == disassembly.EntryLevelUnmappable {
+		content.WriteString(e.Address)
 	} else {
-		// incomplete disassembly, prepare "no disasm" prompt
-		ai := dbg.dbgmem.mapAddress(addr, true)
-		if ai == nil {
-			prompt.WriteString(fmt.Sprintf(" %#04x (%d) unmappable address ]", addr, bank))
-		} else {
-			switch ai.area {
-			case memorymap.RAM:
-				prompt.WriteString(fmt.Sprintf(" %#04x (%d) in RAM! ]", addr, bank))
-			case memorymap.Cartridge:
-				prompt.WriteString(fmt.Sprintf(" %#04x (%d) no disasm ]", addr, bank))
-			default:
-				// if we're not in RAM or Cartridge space then we must be in
-				// the TIA or RIOT - this would be very odd indeed
-				prompt.WriteString(fmt.Sprintf(" %#04x (%d) WTF! ]", addr, bank))
-			}
+		// this is the ideal path. the address is in the disassembly and we've
+		// decoded it already
+		content.WriteString(fmt.Sprintf("%s %s", e.Address, e.Mnemonic))
+
+		if e.Operand.String() != "" {
+			content.WriteString(fmt.Sprintf(" %s", e.Operand))
 		}
 	}
 
-	// display indicator that the CPU is waiting for WSYNC to end. only applies
-	// when in video step mode.
-	if videoCycle && !dbg.vcs.CPU.RdyFlg {
-		prompt.WriteString(" !")
+	p := terminal.Prompt{
+		Content:   content.String(),
+		Recording: dbg.scriptScribe.IsActive(),
+		CPURdy:    dbg.VCS.CPU.RdyFlg,
 	}
 
-	// video cycle prompt
-	if videoCycle && !dbg.vcs.CPU.LastResult.Final {
-		prompt.WriteString(" > ")
-		return terminal.Prompt{Content: prompt.String(), Style: terminal.StylePromptVideoStep}
+	if dbg.VCS.CPU.LastResult.Final {
+		p.Type = terminal.PromptTypeCPUStep
+	} else {
+		p.Type = terminal.PromptTypeVideoStep
 	}
 
-	// cpu cycle prompt
-	prompt.WriteString(" >> ")
-	return terminal.Prompt{Content: prompt.String(), Style: terminal.StylePromptCPUStep}
+	return p
 }

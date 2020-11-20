@@ -12,10 +12,6 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package riot
 
@@ -23,30 +19,44 @@ import (
 	"strings"
 
 	"github.com/jetsetilly/gopher2600/hardware/memory/bus"
-	"github.com/jetsetilly/gopher2600/hardware/riot/input"
+	"github.com/jetsetilly/gopher2600/hardware/preferences"
+	"github.com/jetsetilly/gopher2600/hardware/riot/ports"
 	"github.com/jetsetilly/gopher2600/hardware/riot/timer"
 )
 
-// RIOT represents the PIA 6532 found in the VCS
+// RIOT represents the PIA 6532 found in the VCS.
 type RIOT struct {
 	mem bus.ChipBus
 
+	prefs *preferences.Preferences
+
 	Timer *timer.Timer
-	Input *input.Input
+	Ports *ports.Ports
 }
 
-// NewRIOT is the preferred method of initialisation for the RIOT type
-func NewRIOT(mem bus.ChipBus, tiaMem bus.ChipBus) (*RIOT, error) {
-	var err error
-
-	riot := &RIOT{mem: mem}
-	riot.Timer = timer.NewTimer(mem)
-	riot.Input, err = input.NewInput(mem, tiaMem)
-	if err != nil {
-		return nil, err
+// NewRIOT is the preferred method of initialisation for the RIOT type.
+func NewRIOT(prefs *preferences.Preferences, mem bus.ChipBus, tiaMem bus.ChipBus) *RIOT {
+	return &RIOT{
+		prefs: prefs,
+		mem:   mem,
+		Timer: timer.NewTimer(prefs, mem),
+		Ports: ports.NewPorts(mem, tiaMem),
 	}
+}
 
-	return riot, nil
+// Snapshot creates a copy of the RIOT in its current state.
+func (riot *RIOT) Snapshot() *RIOT {
+	n := *riot
+	n.Timer = riot.Timer.Snapshot()
+	n.Ports = riot.Ports.Snapshot()
+	return &n
+}
+
+// Plumb new ChipBusses into the RIOT.
+func (riot *RIOT) Plumb(mem bus.ChipBus, tiaMem bus.ChipBus) {
+	riot.mem = mem
+	riot.Timer.Plumb(mem)
+	riot.Ports.Plumb(mem, tiaMem)
 }
 
 func (riot RIOT) String() string {
@@ -55,25 +65,25 @@ func (riot RIOT) String() string {
 	return s.String()
 }
 
-// ReadMemory checks for the most recent write by the CPU to the RIOT memory
-// registers
-func (riot *RIOT) ReadMemory() {
-	serviceMemory, data := riot.mem.ChipRead()
-	if !serviceMemory {
+// UpdateRIOT checks for the most recent write by the CPU to the RIOT memory
+// registers.
+func (riot *RIOT) UpdateRIOT() {
+	ok, data := riot.mem.ChipRead()
+	if !ok {
 		return
 	}
 
-	serviceMemory = riot.Timer.ReadMemory(data)
-	if !serviceMemory {
+	ok = riot.Timer.Update(data)
+	if !ok {
 		return
 	}
 
-	_ = riot.Input.ReadMemory(data)
+	_ = riot.Ports.Update(data)
 }
 
-// Step moves the state of the RIOT forward one video cycle
+// Step moves the state of the RIOT forward one video cycle.
 func (riot *RIOT) Step() {
-	riot.ReadMemory()
+	riot.UpdateRIOT()
 	riot.Timer.Step()
-	riot.Input.Step()
+	riot.Ports.Step()
 }

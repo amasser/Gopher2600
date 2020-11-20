@@ -12,10 +12,6 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package sdlimgui
 
@@ -60,7 +56,7 @@ func (win *winAudio) draw() {
 		return
 	}
 
-	imgui.SetNextWindowPosV(imgui.Vec2{641, 565}, imgui.ConditionFirstUseEver, imgui.Vec2{0, 0})
+	imgui.SetNextWindowPosV(imgui.Vec2{648, 440}, imgui.ConditionFirstUseEver, imgui.Vec2{0, 0})
 	imgui.BeginV(winAudioTitle, &win.open, imgui.WindowFlagsAlwaysAutoResize)
 
 	imgui.PushStyleColor(imgui.StyleColorFrameBg, win.img.cols.AudioOscBg)
@@ -76,7 +72,7 @@ func (win *winAudio) draw() {
 		select {
 		case d := <-win.newData:
 			ct++
-			win.displayBuffer = append(win.displayBuffer, float32(d))
+			win.displayBuffer = append(win.displayBuffer, d)
 		default:
 			done = true
 			win.displayBuffer = win.displayBuffer[ct:]
@@ -84,13 +80,16 @@ func (win *winAudio) draw() {
 	}
 }
 
-// SetAudio implements television.AudioMixer
+// SetAudio implements television.AudioMixer.
 func (win *winAudio) SetAudio(audioData uint8) error {
-	win.newData <- float32(audioData) / 256
+	select {
+	case win.newData <- float32(audioData) / 256:
+	default:
+	}
 	return nil
 }
 
-// EndMixing implements television.AudioMixer
+// EndMixing implements television.AudioMixer.
 func (win *winAudio) EndMixing() error {
 	return nil
 }

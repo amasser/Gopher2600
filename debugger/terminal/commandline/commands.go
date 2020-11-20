@@ -12,10 +12,6 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package commandline
 
@@ -23,10 +19,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/jetsetilly/gopher2600/errors"
+	"github.com/jetsetilly/gopher2600/curated"
 )
 
-// Commands is the root of the node tree
+// Commands is the root of the node tree.
 type Commands struct {
 	Index map[string]*node
 
@@ -38,21 +34,19 @@ type Commands struct {
 	helps       map[string]string
 }
 
-// Len implements Sort package interface
+// Len implements Sort package interface.
 func (cmds Commands) Len() int {
 	return len(cmds.cmds)
 }
 
-// Less implements Sort package interface
+// Less implements Sort package interface.
 func (cmds Commands) Less(i int, j int) bool {
 	return cmds.cmds[i].tag < cmds.cmds[j].tag
 }
 
-// Swap implements Sort package interface
+// Swap implements Sort package interface.
 func (cmds Commands) Swap(i int, j int) {
-	swp := cmds.cmds[i]
-	cmds.cmds[i] = cmds.cmds[j]
-	cmds.cmds[j] = swp
+	cmds.cmds[i], cmds.cmds[j] = cmds.cmds[j], cmds.cmds[i]
 }
 
 // String returns the verbose representation of the command tree. Use this only
@@ -61,7 +55,7 @@ func (cmds Commands) Swap(i int, j int) {
 func (cmds Commands) String() string {
 	s := strings.Builder{}
 	for c := range cmds.cmds {
-		s.WriteString(fmt.Sprintf("%s", cmds.cmds[c]))
+		s.WriteString(cmds.cmds[c].String())
 		s.WriteString("\n")
 	}
 	return strings.TrimRight(s.String(), "\n")
@@ -69,11 +63,11 @@ func (cmds Commands) String() string {
 
 // AddHelp adds a "help" command to an already prepared Commands type. it uses
 // the top-level nodes of the Commands instance as arguments for the specified
-// helpCommand
+// helpCommand.
 func (cmds *Commands) AddHelp(helpCommand string, helps map[string]string) error {
 	// if help command exists then there is nothing to do
 	if _, ok := cmds.Index[helpCommand]; ok {
-		return errors.New(errors.HelpError, fmt.Sprintf("%s: already defined", helpCommand))
+		return curated.Errorf("%s: already defined", helpCommand)
 	}
 
 	// keep reference to helps
@@ -113,7 +107,7 @@ func (cmds *Commands) AddHelp(helpCommand string, helps map[string]string) error
 	// parse the constructed definition
 	p, d, err := parseDefinition(defn.String(), "")
 	if err != nil {
-		return errors.New(errors.HelpError, fmt.Sprintf("%s: %s (char %d)", helpCommand, err, d))
+		return curated.Errorf("%s: %s (char %d)", helpCommand, err, d)
 	}
 
 	// add parsed definition to list of commands
@@ -124,13 +118,13 @@ func (cmds *Commands) AddHelp(helpCommand string, helps map[string]string) error
 
 	// record sizing information for help subsystem
 	cmds.helpCommand = helpCommand
-	cmds.helpCols = int(80 / (longest + 3))
+	cmds.helpCols = 80 / (longest + 3)
 	cmds.helpColFmt = fmt.Sprintf("%%%ds", longest+3)
 
 	return nil
 }
 
-// HelpOverview returns a columnised list of all help entries
+// HelpOverview returns a columnised list of all help entries.
 func (cmds Commands) HelpOverview() string {
 	s := strings.Builder{}
 	for c := range cmds.cmds {
@@ -142,7 +136,7 @@ func (cmds Commands) HelpOverview() string {
 	return strings.TrimRight(s.String(), "\n")
 }
 
-// Help returns the help (and usage for the command)
+// Help returns the help (and usage for the command).
 func (cmds Commands) Help(keyword string) string {
 	keyword = strings.ToUpper(keyword)
 

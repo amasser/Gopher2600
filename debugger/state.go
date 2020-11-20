@@ -12,42 +12,64 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package debugger
 
 import (
 	"github.com/jetsetilly/gopher2600/disassembly"
+	"github.com/jetsetilly/gopher2600/logger"
 )
 
-// GetQuantum returns the current quantum value
+// The functions in this file are all about getting information in/out of the
+// debugger that would otherwise be awkward or impossible through terminal
+// commands.
+//
+// All of these functions are candidates for being replaced by terminal
+// commands, with the understanding that doing so might: (a) be impossible to
+// do so; (b) have a significant performance impact
+//
+// When calling these functions from another goroutine the PushRawEvent()
+// function should be used to avoid an awkward critical section.
+
+// GetQuantum returns the current quantum value.
 func (dbg *Debugger) GetQuantum() QuantumMode {
 	return dbg.quantum
 }
 
-// GetLastBank returns the selected cartridge bank from before the last
-// instruction was executed
-func (dbg *Debugger) GetLastBank() int {
-	return dbg.lastBank
+// GetLastResult returns the formatted disasembly entry of the last CPU
+// execution.
+func (dbg *Debugger) GetLastResult() disassembly.Entry {
+	return *dbg.lastResult
 }
 
 // HasBreak returns true if there is a breakpoint at the address. the second
-// return value indicates if there is a breakpoint at the address AND bank
+// return value indicates if there is a breakpoint at the address AND bank.
 func (dbg *Debugger) HasBreak(e *disassembly.Entry) BreakGroup {
 	g, _ := dbg.breakpoints.hasBreak(e)
 	return g
 }
 
 // TogglePCBreak sets or unsets a PC break at the address rerpresented by th
-// disassembly entry
+// disassembly entry.
 func (dbg *Debugger) TogglePCBreak(e *disassembly.Entry) {
 	dbg.breakpoints.togglePCBreak(e)
 }
 
-// IsRunning returns true if emulation is being run
-func (dbg *Debugger) IsRunning() bool {
-	return dbg.running
+// PushRawEvent onto the event queue. This can be used to get information out
+// of the debygger into another goroutine. Useful for when there is no
+// equivalent terminal command.
+func (dbg *Debugger) PushRawEvent(f func()) {
+	select {
+	case dbg.events.RawEvents <- f:
+	default:
+		logger.Log("debugger", "dropped raw event push")
+	}
+}
+
+func (dbg *Debugger) PushRawEventReturn(f func()) {
+	select {
+	case dbg.events.RawEventsReturn <- f:
+	default:
+		logger.Log("debugger", "dropped raw event (with return) push")
+	}
 }

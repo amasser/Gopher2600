@@ -12,10 +12,6 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package digest
 
@@ -23,8 +19,10 @@ import (
 	"crypto/sha1"
 	"fmt"
 
-	"github.com/jetsetilly/gopher2600/errors"
-	"github.com/jetsetilly/gopher2600/television"
+	"github.com/jetsetilly/gopher2600/curated"
+	"github.com/jetsetilly/gopher2600/hardware/television"
+	"github.com/jetsetilly/gopher2600/hardware/television/signal"
+	"github.com/jetsetilly/gopher2600/hardware/television/specification"
 )
 
 // Video is an implementation of the television.PixelRenderer interface with an
@@ -34,7 +32,8 @@ import (
 // Note that the use of SHA-1 is fine for this application because this is not
 // a cryptographic task.
 type Video struct {
-	television.Television
+	*television.Television
+	spec     specification.Spec
 	digest   [sha1.Size]byte
 	pixels   []byte
 	frameNum int
@@ -45,7 +44,7 @@ const pixelDepth = 3
 // NewVideo initialises a new instance of DigestTV. For convenience, the
 // television argument can be nil, in which case an instance of
 // StellaTelevision will be created.
-func NewVideo(tv television.Television) (*Video, error) {
+func NewVideo(tv *television.Television) (*Video, error) {
 	// set up digest tv
 	dig := &Video{Television: tv}
 
@@ -56,19 +55,20 @@ func NewVideo(tv television.Television) (*Video, error) {
 	// digest value
 	l := len(dig.digest)
 
-	// alloscate enough pixels for entire frame
-	l += ((television.HorizClksScanline + 1) * (dig.GetSpec().ScanlinesTotal + 1) * pixelDepth)
+	// allocate enough pixels for entire frame
+	dig.spec = dig.GetSpec()
+	l += ((specification.HorizClksScanline + 1) * (dig.spec.ScanlinesTotal + 1) * pixelDepth)
 	dig.pixels = make([]byte, l)
 
 	return dig, nil
 }
 
-// Hash implements digest.Digest interface
+// Hash implements digest.Digest interface.
 func (dig Video) Hash() string {
 	return fmt.Sprintf("%x", dig.digest)
 }
 
-// ResetDigest implements digest.Digest interface
+// ResetDigest implements digest.Digest interface.
 func (dig *Video) ResetDigest() {
 	for i := range dig.digest {
 		dig.digest[i] = 0
@@ -77,59 +77,70 @@ func (dig *Video) ResetDigest() {
 
 // Resize implements television.PixelRenderer interface
 //
-// Note that Resize() does nothing in this implementation because we always
-// work on the entire frame.
-//
-// that said, we could record resize events by having a flag bit in the pixel
-// array. this additional bit (or byte) will then be included in the hashing
-// process.
-//
-// !!TODO: consider resize flag bit for digest.Video
-func (dig *Video) Resize(_, _ int) error {
+// In this implementation we only handle specification changes. This means the
+// digest is immune from changes to the frame resizing method used by the
+// television implementation. Changes to how the specification is flipped might
+// cause comparison failures however.
+func (dig *Video) Resize(spec specification.Spec, _, _ int) error {
+	if spec.ID == dig.spec.ID {
+		return nil
+	}
+
+	// allocate enough pixels for entire frame
+	dig.spec = spec
+	l := len(dig.digest)
+	l += ((specification.HorizClksScanline + 1) * (spec.ScanlinesTotal + 1) * pixelDepth)
+	dig.pixels = make([]byte, l)
+
 	return nil
 }
 
-// NewFrame implements television.PixelRenderer interface
-func (dig *Video) NewFrame(frameNum int) error {
+// NewFrame implements television.PixelRenderer interface.
+func (dig *Video) NewFrame(_ bool) error {
 	// chain fingerprints by copying the value of the last fingerprint
 	// to the head of the video data
 	n := copy(dig.pixels, dig.digest[:])
 	if n != len(dig.digest) {
-		return errors.New(errors.VideoDigest, fmt.Sprintf("digest error during new frame"))
+		return curated.Errorf("digest: video: digest error during new frame")
 	}
 	dig.digest = sha1.Sum(dig.pixels)
-	dig.frameNum = frameNum
+	dig.frameNum++
 	return nil
 }
 
-// NewScanline implements television.PixelRenderer interface
+// NewScanline implements television.PixelRenderer interface.
 func (dig *Video) NewScanline(scanline int) error {
 	return nil
 }
 
-// SetPixel implements television.PixelRenderer interface
-func (dig *Video) SetPixel(x, y int, red, green, blue byte, vblank bool) error {
+// UpdatingPixels implements television.PixelRenderer interface.
+func (dig *Video) UpdatingPixels(_ bool) {
+}
+
+// SetPixel implements television.PixelRenderer interface.
+func (dig *Video) SetPixel(sig signal.SignalAttributes, _ bool) error {
 	// preserve the first few bytes for a chained fingerprint
 	i := len(dig.digest)
-	i += television.HorizClksScanline * y * pixelDepth
-	i += x * pixelDepth
+	i += specification.HorizClksScanline * sig.Scanline * pixelDepth
+	i += sig.HorizPos * pixelDepth
 
 	if i <= len(dig.pixels)-pixelDepth {
+		col := dig.spec.GetColor(sig.Pixel)
+
 		// setting every pixel regardless of vblank value
-		dig.pixels[i] = red
-		dig.pixels[i+1] = green
-		dig.pixels[i+2] = blue
+		dig.pixels[i] = col.R
+		dig.pixels[i+1] = col.G
+		dig.pixels[i+2] = col.B
 	}
 
 	return nil
 }
 
-// SetAltPixel implements television.PixelRenderer interface
-func (dig *Video) SetAltPixel(x, y int, red, green, blue byte, vblank bool) error {
-	return nil
+// Reset implements television.PixelRenderer interface.
+func (dig *Video) Reset() {
 }
 
-// EndRendering implements television.PixelRenderer interface
+// EndRendering implements television.PixelRenderer interface.
 func (dig *Video) EndRendering() error {
 	return nil
 }

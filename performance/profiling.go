@@ -12,10 +12,6 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package performance
 
@@ -24,37 +20,50 @@ import (
 	"runtime"
 	"runtime/pprof"
 
-	"github.com/jetsetilly/gopher2600/errors"
+	"github.com/jetsetilly/gopher2600/curated"
 )
 
-// ProfileCPU runs supplied function "through" the pprof CPU profiler
-func ProfileCPU(outFile string, run func() error) error {
+// ProfileCPU runs supplied function "through" the pprof CPU profiler.
+func ProfileCPU(outFile string, run func() error) (rerr error) {
 	// write cpu profile
 	f, err := os.Create(outFile)
 	if err != nil {
-		return errors.New(errors.PerformanceError, err)
+		return curated.Errorf("performance; %v", err)
 	}
+	defer func() {
+		err := f.Close()
+		if err != nil {
+			rerr = curated.Errorf("performance; %v", err)
+		}
+	}()
+
 	err = pprof.StartCPUProfile(f)
 	if err != nil {
-		return errors.New(errors.PerformanceError, err)
+		return curated.Errorf("performance; %v", err)
 	}
 	defer pprof.StopCPUProfile()
 
 	return run()
 }
 
-// ProfileMem takes a snapshot of memory and writes to outFile
-func ProfileMem(outFile string) error {
+// ProfileMem takes a snapshot of memory and writes to outFile.
+func ProfileMem(outFile string) (rerr error) {
 	f, err := os.Create(outFile)
 	if err != nil {
-		return errors.New(errors.PerformanceError, err)
+		return curated.Errorf("performance; %v", err)
 	}
+	defer func() {
+		err := f.Close()
+		if err != nil {
+			rerr = curated.Errorf("performance; %v", err)
+		}
+	}()
+
 	runtime.GC()
 	err = pprof.WriteHeapProfile(f)
 	if err != nil {
-		return errors.New(errors.PerformanceError, err)
+		return curated.Errorf("performance; %v", err)
 	}
-	f.Close()
 
 	return nil
 }

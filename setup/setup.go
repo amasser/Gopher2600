@@ -12,25 +12,21 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package setup
 
 import (
 	"github.com/jetsetilly/gopher2600/cartridgeloader"
+	"github.com/jetsetilly/gopher2600/curated"
 	"github.com/jetsetilly/gopher2600/database"
-	"github.com/jetsetilly/gopher2600/errors"
 	"github.com/jetsetilly/gopher2600/hardware"
 	"github.com/jetsetilly/gopher2600/paths"
 )
 
-// the location of the setupDB file
+// the location of the setupDB file.
 const setupDBFile = "setupDB"
 
-// setupEntry is the generic entry type in the setupDB
+// setupEntry is the generic entry type in the setupDB.
 type setupEntry interface {
 	database.Entry
 
@@ -42,9 +38,8 @@ type setupEntry interface {
 }
 
 // when starting a database session we must add the details of the entry types
-// that will be found in the database
+// that will be found in the database.
 func initDBSession(db *database.Session) error {
-
 	// add entry types
 	if err := db.RegisterEntryType(panelSetupID, deserialisePanelSetupEntry); err != nil {
 		return err
@@ -67,44 +62,44 @@ func initDBSession(db *database.Session) error {
 func AttachCartridge(vcs *hardware.VCS, cartload cartridgeloader.Loader) error {
 	err := vcs.AttachCartridge(cartload)
 	if err != nil {
-		return err
+		return curated.Errorf("setup: %v", err)
 	}
 
 	dbPth, err := paths.ResourcePath("", setupDBFile)
 	if err != nil {
-		return errors.New(errors.SetupError, err)
+		return curated.Errorf("setup: %v", err)
 	}
 
 	db, err := database.StartSession(dbPth, database.ActivityReading, initDBSession)
 	if err != nil {
-		if errors.Is(err, errors.DatabaseFileUnavailable) {
+		if curated.Is(err, database.NotAvailable) {
 			// silently ignore absence of setup database
 			return nil
 		}
-		return errors.New(errors.SetupError, err)
+		return curated.Errorf("setup: %v", err)
 	}
 	defer db.EndSession(false)
 
-	onSelect := func(ent database.Entry) (bool, error) {
+	onSelect := func(ent database.Entry) error {
 		// database entry should also satisfy setupEntry interface
 		set, ok := ent.(setupEntry)
 		if !ok {
-			return false, errors.New(errors.PanicError, "setup.AttachCartridge()", "database entry does not satisfy setupEntry interface")
+			return curated.Errorf("setup: attach cartridge: database entry does not satisfy setupEntry interface")
 		}
 
 		if set.matchCartHash(vcs.Mem.Cart.Hash) {
 			err := set.apply(vcs)
 			if err != nil {
-				return false, err
+				return err
 			}
 		}
 
-		return true, nil
+		return nil
 	}
 
 	_, err = db.SelectAll(onSelect)
 	if err != nil {
-		return errors.New(errors.SetupError, err)
+		return curated.Errorf("setup: %v", err)
 	}
 
 	return nil

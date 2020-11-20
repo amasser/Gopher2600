@@ -12,30 +12,81 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package disassembly
 
 import (
-	"fmt"
-
-	"github.com/jetsetilly/gopher2600/errors"
+	"github.com/jetsetilly/gopher2600/curated"
 )
 
-// Iterate faciliates traversal of the disassembly
-type Iterate struct {
+// IterateCart faciliates traversal over all the banks in a cartridge.
+type IterateCart struct {
+	dsm  *Disassembly
+	bank int
+
+	// number of banks in cart iteration
+	BankCount int
+}
+
+// NewCartIteration is the preferred method of initialisation for the
+// IterateCart type.
+func (dsm *Disassembly) NewCartIteration() *IterateCart {
+	dsm.crit.Lock()
+	defer dsm.crit.Unlock()
+
+	citr := &IterateCart{
+		BankCount: len(dsm.entries),
+		dsm:       dsm,
+	}
+
+	return citr
+}
+
+// Start new iteration from the first bank.
+func (citr *IterateCart) Start() (int, bool) {
+	citr.dsm.crit.Lock()
+	defer citr.dsm.crit.Unlock()
+	citr.bank = -1
+	return citr.next()
+}
+
+// The next bank in the cartidge. Returns (-1, false) if there are no more banks.
+func (citr *IterateCart) Next() (int, bool) {
+	citr.dsm.crit.Lock()
+	defer citr.dsm.crit.Unlock()
+	return citr.next()
+}
+
+func (citr *IterateCart) next() (int, bool) {
+	if citr.bank+1 >= citr.BankCount {
+		return -1, false
+	}
+	citr.bank++
+	return citr.bank, true
+}
+
+// IterateBank faciliates traversal a specific bank.
+//
+// Instances of Entry returned by Start(), Next() and SkipNext() are copies of
+// the disassembly entry, so the Iterate mechanism is suitable for use in a
+// goroutine different to that which is handling (eg. updating) the disassembly
+// itslef.
+type IterateBank struct {
 	dsm       *Disassembly
 	minLevel  EntryLevel
 	bank      int
 	idx       int
 	lastEntry *Entry
+
+	// total number of entries in iteration with the specified minimum level
+	EntryCount int
+
+	// the number of those entries with a label
+	LabelCount int
 }
 
-// NewIteration initialises a new iteration of a dissasembly bank. The minLevel
-// argument specifies the minumum entry level which should returned in the
+// NewBankIteration initialises a new iteration of a dissasembly bank. The minLevel
+// argument specifies the minimum entry level which should be returned in the
 // iteration. So, using the following as a guide:
 //
 //	dead < decoded < blessed
@@ -44,80 +95,101 @@ type Iterate struct {
 // EntryLevelDecode. A minLevel of EntryLevelNaive on the other hand, will
 // iterate through entries of EntryLevelNaive *and* EntryLevelDecode. A
 // minLevel of EntryLevelDead will iterate through *all* Entries.
-//
-// The function returns an instance of Iterate, a count of the number of
-// entries the correspond to the minLevel (see above), and any error.
-func (dsm *Disassembly) NewIteration(minLevel EntryLevel, bank int) (*Iterate, int, error) {
-	if bank > len(dsm.reference) {
-		return nil, 0, errors.New(errors.IterationError, fmt.Sprintf("no bank %d in disassembly", bank))
+func (dsm *Disassembly) NewBankIteration(minLevel EntryLevel, bank int) (*IterateBank, error) {
+	dsm.crit.Lock()
+	defer dsm.crit.Unlock()
+
+	// silently reject iterations for non-existent banks. this may happen more
+	// often than you think. for example, loading a new cartridge with fewer
+	// banks than the current cartridge at the exact moment an illegal bank is
+	// being drawn by the sdlimgui disassembly window.
+	if bank >= len(dsm.entries) {
+		return nil, curated.Errorf("no bank %d in disasm", bank)
 	}
 
-	itr := &Iterate{
+	bitr := &IterateBank{
 		dsm:      dsm,
 		minLevel: minLevel,
 		bank:     bank,
 	}
 
-	count := 0
+	// count entries
+	for _, a := range dsm.entries[bank] {
+		if a == nil {
+			return nil, curated.Errorf("disassembly not complete")
+		}
 
-	switch minLevel {
-	case EntryLevelDead:
-		count = dsm.counts[bank][EntryLevelDead]
-		count += dsm.counts[bank][EntryLevelDecoded]
-		count += dsm.counts[bank][EntryLevelBlessed]
+		// count the number of entries of the minimum level
+		if a.Level >= minLevel {
+			bitr.EntryCount++
 
-	case EntryLevelDecoded:
-		count = dsm.counts[bank][EntryLevelDecoded]
-		count += dsm.counts[bank][EntryLevelBlessed]
-
-	case EntryLevelBlessed:
-		count = dsm.counts[bank][EntryLevelBlessed]
+			// count entries (of the minimum level) with a label
+			if a.Label.String() != "" {
+				bitr.LabelCount++
+			}
+		}
 	}
 
-	return itr, count, nil
+	return bitr, nil
 }
 
-// Start new iteration from the first instance of the EntryLevel specified in
-// NewIteration.
-func (itr *Iterate) Start() *Entry {
-	itr.idx = 0
-	return itr.Next()
+// Start new iteration from the first instance of the EntryLevel specified in NewBankIteration.
+func (bitr *IterateBank) Start() (int, *Entry) {
+	bitr.idx = -1
+	return bitr.next()
 }
 
-// Next entry in the disassembly of the previously specified type. Returns nil
-// if end of disassembly has been reached.
-func (itr *Iterate) Next() *Entry {
-	var e *Entry
-
-	if itr.idx > len(itr.dsm.reference[itr.bank])-1 {
-		return nil
-	}
-
-	e = itr.dsm.reference[itr.bank][itr.idx]
-	itr.idx++
-
-	itr.dsm.crit.RLock()
-	defer itr.dsm.crit.RUnlock()
-
-	for itr.idx < len(itr.dsm.reference[itr.bank]) && e.Level < itr.minLevel {
-		e = itr.dsm.reference[itr.bank][itr.idx]
-		itr.idx++
-	}
-
-	itr.lastEntry = e
-
-	return e
+// Next entry in the disassembly of the previously specified type. Returns nil if end of disassembly has been reached.
+func (bitr *IterateBank) Next() (int, *Entry) {
+	return bitr.next()
 }
 
 // SkipNext n entries and return that Entry. An n value of < 0 returns the most
 // recent value in the iteration
-func (itr *Iterate) SkipNext(n int) *Entry {
-	e := itr.lastEntry
-
+//
+// The skipLabels argument indicates that an entry with a label should count as
+// two entries. This is useful for the sdlimgui disassembly window's list
+// clipper (and maybe nothing else).
+func (bitr *IterateBank) SkipNext(n int, skipLabels bool) (int, *Entry) {
+	e := bitr.lastEntry
 	for n > 0 {
-		e = itr.Next()
 		n--
+
+		if e.Label.String() != "" {
+			n--
+		}
+
+		_, e = bitr.next()
+	}
+	return bitr.idx, e
+}
+
+func (bitr *IterateBank) next() (int, *Entry) {
+	bitr.dsm.crit.Lock()
+	defer bitr.dsm.crit.Unlock()
+
+	if bitr.idx+1 >= len(bitr.dsm.entries[bitr.bank]) {
+		return -1, nil
 	}
 
-	return e
+	bitr.idx++
+
+	for bitr.idx < len(bitr.dsm.entries[bitr.bank]) && bitr.dsm.entries[bitr.bank][bitr.idx].Level < bitr.minLevel {
+		bitr.idx++
+	}
+
+	if bitr.idx >= len(bitr.dsm.entries[bitr.bank]) {
+		return -1, nil
+	}
+
+	bitr.lastEntry = bitr.dsm.entries[bitr.bank][bitr.idx]
+
+	return bitr.idx, makeCopyofEntry(*bitr.lastEntry)
+}
+
+// we don't want to return the actual entry in the disassembly because it will
+// result in a race condition erorr if the entry is updated at the same time as
+// we're dealing with the iteration.
+func makeCopyofEntry(e Entry) *Entry {
+	return &e
 }

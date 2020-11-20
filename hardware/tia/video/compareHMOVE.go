@@ -12,10 +12,6 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package video
 
@@ -27,8 +23,7 @@ package video
 // from TIA_HW_Notes.txt:
 //
 // "When the comparator for a given object detects that none of the 4 bits
-// match the bits in the counter state, it clears this latch"
-//
+// match the bits in the counter state, it clears this latch".
 func compareHMOVE(a uint8, b uint8) bool {
 	return a&0x08 == b&0x08 || a&0x04 == b&0x04 || a&0x02 == b&0x02 || a&0x01 == b&0x01
 

@@ -12,10 +12,6 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package sdlimgui
 
@@ -24,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/jetsetilly/gopher2600/gui"
 	"github.com/jetsetilly/gopher2600/hardware/tia/video"
 
 	"github.com/inkyblackness/imgui-go/v2"
@@ -34,13 +31,13 @@ func (win *winTIA) drawPlayer(num int) {
 	// and horizpos indicator
 	dl := imgui.WindowDrawList()
 
-	lz := win.img.lazy.Player0
-	ps := win.img.lazy.VCS.TIA.Video.Player0
-	ms := win.img.lazy.VCS.TIA.Video.Missile0
+	lz := win.img.lz.Player0
+	ps := win.img.lz.Player0.Ps
+	ms := win.img.lz.Missile0.Ms
 	if num != 0 {
-		lz = win.img.lazy.Player1
-		ps = win.img.lazy.VCS.TIA.Video.Player1
-		ms = win.img.lazy.VCS.TIA.Video.Missile1
+		lz = win.img.lz.Player1
+		ps = win.img.lz.Player1.Ps
+		ms = win.img.lz.Missile1.Ms
 	}
 
 	imgui.Spacing()
@@ -49,19 +46,19 @@ func (win *winTIA) drawPlayer(num int) {
 	// selection in palette, missile color is changed too
 	imguiText("Colour")
 	col := lz.Color
-	if win.img.imguiSwatch(col) {
+	if win.img.imguiSwatch(col, 0.75) {
 		win.popupPalette.request(&col, func() {
-			win.img.lazy.Dbg.PushRawEvent(func() { ps.Color = col })
+			win.img.lz.Dbg.PushRawEvent(func() { ps.Color = col })
 
 			// update missile color too
-			win.img.lazy.Dbg.PushRawEvent(func() { ms.Color = col })
+			win.img.lz.Dbg.PushRawEvent(func() { ms.Color = col })
 		})
 	}
 
 	imguiText("Reflected")
 	ref := lz.Reflected
 	if imgui.Checkbox("##reflected", &ref) {
-		win.img.lazy.Dbg.PushRawEvent(func() { ps.Reflected = ref })
+		win.img.lz.Dbg.PushRawEvent(func() { ps.Reflected = ref })
 	}
 
 	imgui.SameLine()
@@ -70,7 +67,7 @@ func (win *winTIA) drawPlayer(num int) {
 	if imgui.Checkbox("##vertdelay", &vd) {
 		// vertical delay affects which gfx register to use. set vertical delay
 		// using the SetVerticalDelay function
-		win.img.lazy.Dbg.PushRawEvent(func() { ps.SetVerticalDelay(vd) })
+		win.img.lz.Dbg.PushRawEvent(func() { ps.SetVerticalDelay(vd) })
 	}
 
 	imgui.Spacing()
@@ -79,21 +76,19 @@ func (win *winTIA) drawPlayer(num int) {
 	// hmove value
 	imguiText("HMOVE")
 	imgui.SameLine()
-	imgui.PushItemWidth(win.byteDim.X)
 	hmove := fmt.Sprintf("%01x", lz.Hmove)
-	if imguiHexInput("##hmove", !win.img.paused, 1, &hmove) {
+	if imguiHexInput("##hmove", win.img.state != gui.StatePaused, 1, &hmove) {
 		if v, err := strconv.ParseUint(hmove, 16, 8); err == nil {
-			win.img.lazy.Dbg.PushRawEvent(func() { ps.Hmove = uint8(v) })
+			win.img.lz.Dbg.PushRawEvent(func() { ps.Hmove = uint8(v) })
 		}
 	}
-	imgui.PopItemWidth()
 
 	// hmove slider
 	imgui.SameLine()
 	imgui.PushItemWidth(win.hmoveSliderWidth)
 	hmoveSlider := int32(lz.Hmove) - 8
 	if imgui.SliderIntV("##hmoveslider", &hmoveSlider, -8, 7, "%d") {
-		win.img.lazy.Dbg.PushRawEvent(func() { ps.Hmove = uint8(hmoveSlider + 8) })
+		win.img.lz.Dbg.PushRawEvent(func() { ps.Hmove = uint8(hmoveSlider + 8) })
 	}
 	imgui.PopItemWidth()
 
@@ -102,7 +97,7 @@ func (win *winTIA) drawPlayer(num int) {
 
 	// graphics data - new
 	imguiText("New Gfx")
-	ngfxSeq := newDrawlistSequence(win.img, imgui.Vec2{X: imgui.FrameHeight(), Y: imgui.FrameHeight()}, 0.1)
+	ngfxSeq := newDrawlistSequence(win.img, imgui.Vec2{X: imgui.FrameHeight(), Y: imgui.FrameHeight()}, false)
 	od := lz.GfxDataNew
 	for i := 0; i < 8; i++ {
 		var col uint8
@@ -112,9 +107,9 @@ func (win *winTIA) drawPlayer(num int) {
 			col = 0x0
 			ngfxSeq.nextItemDepressed = true
 		}
-		if ngfxSeq.rectFilled(col) {
+		if ngfxSeq.rectFillTvCol(col) {
 			od ^= 0x80 >> i
-			win.img.lazy.Dbg.PushRawEvent(func() { ps.GfxDataNew = od })
+			win.img.lz.Dbg.PushRawEvent(func() { ps.GfxDataNew = od })
 		}
 		ngfxSeq.sameLine()
 
@@ -126,7 +121,7 @@ func (win *winTIA) drawPlayer(num int) {
 	// graphics data - old
 	imgui.SameLine()
 	imguiText("Old Gfx")
-	ogfxSeq := newDrawlistSequence(win.img, imgui.Vec2{X: imgui.FrameHeight(), Y: imgui.FrameHeight()}, 0.1)
+	ogfxSeq := newDrawlistSequence(win.img, imgui.Vec2{X: imgui.FrameHeight(), Y: imgui.FrameHeight()}, false)
 	nd := lz.GfxDataOld
 	for i := 0; i < 8; i++ {
 		var col uint8
@@ -136,9 +131,9 @@ func (win *winTIA) drawPlayer(num int) {
 			col = 0x0
 			ogfxSeq.nextItemDepressed = true
 		}
-		if ogfxSeq.rectFilled(col) {
+		if ogfxSeq.rectFillTvCol(col) {
 			nd ^= 0x80 >> i
-			win.img.lazy.Dbg.PushRawEvent(func() { ps.GfxDataOld = nd })
+			win.img.lz.Dbg.PushRawEvent(func() { ps.GfxDataOld = nd })
 		}
 		ogfxSeq.sameLine()
 
@@ -151,9 +146,9 @@ func (win *winTIA) drawPlayer(num int) {
 	if lz.ScanIsActive {
 		var idx int
 		if lz.Reflected {
-			idx = 7 - lz.ScanPixel
-		} else {
 			idx = lz.ScanPixel
+		} else {
+			idx = 7 - lz.ScanPixel
 		}
 
 		seq := ngfxSeq
@@ -178,9 +173,9 @@ func (win *winTIA) drawPlayer(num int) {
 		for k := range video.PlayerSizes {
 			if imgui.Selectable(video.PlayerSizes[k]) {
 				v := uint8(k) // being careful about scope
-				win.img.lazy.Dbg.PushRawEvent(func() {
+				win.img.lz.Dbg.PushRawEvent(func() {
 					ps.SizeAndCopies = v
-					win.img.lazy.VCS.TIA.Video.UpdateNUSIZ(num, false)
+					win.img.lz.Dbg.VCS.TIA.Video.UpdateNUSIZ(num, false)
 				})
 			}
 		}
@@ -192,11 +187,10 @@ func (win *winTIA) drawPlayer(num int) {
 	imgui.SameLine()
 	imguiText("NUSIZ")
 	imgui.SameLine()
-	imgui.PushItemWidth(win.byteDim.X)
 	nusiz := fmt.Sprintf("%02x", lz.Nusiz)
-	if imguiHexInput("##nusiz", !win.img.paused, 2, &nusiz) {
+	if imguiHexInput("##nusiz", win.img.state != gui.StatePaused, 2, &nusiz) {
 		if v, err := strconv.ParseUint(nusiz, 16, 8); err == nil {
-			win.img.lazy.Dbg.PushRawEvent(func() {
+			win.img.lz.Dbg.PushRawEvent(func() {
 				ps.SetNUSIZ(uint8(v))
 
 				// update missile NUSIZ too
@@ -204,7 +198,6 @@ func (win *winTIA) drawPlayer(num int) {
 			})
 		}
 	}
-	imgui.PopItemWidth()
 	imgui.SameLine()
 
 	s := strings.Builder{}
@@ -236,7 +229,7 @@ func (win *winTIA) drawPlayer(num int) {
 	imgui.Spacing()
 
 	// horizontal positioning
-	imgui.Text(fmt.Sprintf("Last reset at pixel %03d. Draws at pixel %03d", lz.ResetPixel, lz.HmovedPixel))
+	imgui.Text(fmt.Sprintf("Last reset at pixel %03d. First copy draws at pixel %03d", lz.ResetPixel, lz.HmovedPixel))
 
 	if lz.MoreHmove {
 		imgui.SameLine()

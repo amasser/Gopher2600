@@ -12,10 +12,6 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package disassembly
 
@@ -23,19 +19,18 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/jetsetilly/gopher2600/errors"
+	"github.com/jetsetilly/gopher2600/curated"
 )
 
-// WriteAttr controls what is printed by the Write*() functions
+// WriteAttr controls what is printed by the Write*() functions.
 type WriteAttr struct {
 	ByteCode bool
-	Raw      bool
 }
 
-// Write the entire disassembly to io.Writer
+// Write the entire disassembly to io.Writer.
 func (dsm *Disassembly) Write(output io.Writer, attr WriteAttr) error {
 	var err error
-	for b := 0; b < len(dsm.reference); b++ {
+	for b := 0; b < len(dsm.entries); b++ {
 		err = dsm.WriteBank(output, attr, b)
 		if err != nil {
 			return err
@@ -45,54 +40,48 @@ func (dsm *Disassembly) Write(output io.Writer, attr WriteAttr) error {
 	return nil
 }
 
-// WriteBank writes the disassembly of the selected bank to io.Writer
+// WriteBank writes the disassembly of the selected bank to io.Writer.
 func (dsm *Disassembly) WriteBank(output io.Writer, attr WriteAttr, bank int) error {
-	if bank < 0 || bank > len(dsm.reference)-1 {
-		return errors.New(errors.DisasmError, fmt.Sprintf("no such bank (%d)", bank))
+	if bank < 0 || bank > len(dsm.entries)-1 {
+		return curated.Errorf("disassembly: no such bank (%d)", bank)
 	}
 
 	output.Write([]byte(fmt.Sprintf("--- bank %d ---\n", bank)))
 
-	for i := range dsm.reference[bank] {
-		dsm.WriteEntry(output, attr, dsm.reference[bank][i])
+	for i := range dsm.entries[bank] {
+		dsm.WriteEntry(output, attr, dsm.entries[bank][i])
 	}
 
 	return nil
 }
 
-// WriteEntry writes a single Instruction to io.Writer
+// WriteEntry writes a single Instruction to io.Writer.
 func (dsm *Disassembly) WriteEntry(output io.Writer, attr WriteAttr, e *Entry) {
 	if e == nil {
 		return
 	}
 
-	if !attr.Raw && e.Level < EntryLevelBlessed {
+	if e.Level < EntryLevelBlessed {
 		return
 	}
 
-	if e.Location != "" {
-		output.Write([]byte(dsm.GetField(FldLocation, e)))
+	if e.Label.String() != "" {
+		output.Write([]byte(e.GetField(FldLabel)))
 		output.Write([]byte("\n"))
 	}
 
-	if attr.Raw {
-		output.Write([]byte(fmt.Sprintf("%s  ", e.Level)))
-	}
-
 	if attr.ByteCode {
-		output.Write([]byte(dsm.GetField(FldBytecode, e)))
+		output.Write([]byte(e.GetField(FldBytecode)))
 		output.Write([]byte(" "))
 	}
 
-	output.Write([]byte(dsm.GetField(FldAddress, e)))
+	output.Write([]byte(e.GetField(FldAddress)))
 	output.Write([]byte(" "))
-	output.Write([]byte(dsm.GetField(FldMnemonic, e)))
+	output.Write([]byte(e.GetField(FldMnemonic)))
 	output.Write([]byte(" "))
-	output.Write([]byte(dsm.GetField(FldOperand, e)))
+	output.Write([]byte(e.GetField(FldOperand)))
 	output.Write([]byte(" "))
-	output.Write([]byte(dsm.GetField(FldDefnCycles, e)))
-	output.Write([]byte(" "))
-	output.Write([]byte(dsm.GetField(FldDefnNotes, e)))
+	output.Write([]byte(e.GetField(FldDefnCycles)))
 
 	output.Write([]byte("\n"))
 }

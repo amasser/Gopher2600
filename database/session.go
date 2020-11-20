@@ -12,26 +12,26 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package database
 
 import (
-	"fmt"
 	"io"
 	"io/ioutil"
 	"os"
 	"strconv"
 	"strings"
 
-	"github.com/jetsetilly/gopher2600/errors"
+	"github.com/jetsetilly/gopher2600/curated"
 )
 
-// Activity is used to specify the general activity of what will be occuring
-// during the database session
+// Sentinal error returned when requested database is not available.
+const (
+	NotAvailable = "database: not available (%s)"
+)
+
+// Activity is used to specify the general activity of what will be occurring
+// during the database session.
 type Activity int
 
 // Valid activities: the "higher level" activities inherit the activity
@@ -39,14 +39,14 @@ type Activity int
 const (
 	ActivityReading Activity = iota
 
-	// Modifying implies Reading
+	// Modifying implies Reading.
 	ActivityModifying
 
-	// Creating implies Modifying (which in turn implies Reading)
+	// Creating implies Modifying (which in turn implies Reading).
 	ActivityCreating
 )
 
-// Session keeps track of a database session
+// Session keeps track of a database session.
 type Session struct {
 	dbfile   *os.File
 	activity Activity
@@ -58,9 +58,9 @@ type Session struct {
 }
 
 // StartSession starts/initialises a new DB session. argument is the function
-// to call when database has been succesfully opened. this function should be
+// to call when database has been successfully opened. this function should be
 // used to add information about the different entries that are to be used in
-// the database (see AddEntryType() function)
+// the database (see AddEntryType() function).
 func StartSession(path string, activity Activity, init func(*Session) error) (*Session, error) {
 	var err error
 
@@ -81,9 +81,9 @@ func StartSession(path string, activity Activity, init func(*Session) error) (*S
 	if err != nil {
 		switch err.(type) {
 		case *os.PathError:
-			return nil, errors.New(errors.DatabaseFileUnavailable, path)
+			return nil, curated.Errorf(NotAvailable, path)
 		}
-		return nil, errors.New(errors.DatabaseError, err)
+		return nil, curated.Errorf("databas: %v", err)
 	}
 
 	// closing of db.dbfile requires a call to endSession()
@@ -101,12 +101,12 @@ func StartSession(path string, activity Activity, init func(*Session) error) (*S
 	return db, nil
 }
 
-// EndSession closes the database
+// EndSession closes the database.
 func (db *Session) EndSession(commitChanges bool) error {
 	// write entries to database
 	if commitChanges {
 		if db.activity == ActivityReading {
-			return errors.New(errors.DatabaseError, "cannot commit to a read-only database")
+			return curated.Errorf("database: cannot commit to a read-only database")
 		}
 
 		err := db.dbfile.Truncate(0)
@@ -168,7 +168,7 @@ func (db *Session) readDBFile() error {
 
 	buffer, err := ioutil.ReadAll(db.dbfile)
 	if err != nil {
-		return errors.New(errors.DatabaseError, err)
+		return curated.Errorf("database: %v", err)
 	}
 
 	// split entries
@@ -185,26 +185,23 @@ func (db *Session) readDBFile() error {
 
 		key, err := strconv.Atoi(fields[leaderFieldKey])
 		if err != nil {
-			msg := fmt.Sprintf("invalid key (%s)", fields[leaderFieldKey])
-			return errors.New(errors.DatabaseReadError, msg, i+1)
+			return curated.Errorf("invalid key (%s) [line %d]", fields[leaderFieldKey], i+1)
 		}
 
 		if _, ok := db.entries[key]; ok {
-			msg := fmt.Sprintf("duplicate key (%v)", key)
-			return errors.New(errors.DatabaseReadError, msg, i+1)
+			return curated.Errorf("duplicate key (%s) [line %d]", key, i+1)
 		}
 
 		var ent Entry
 
 		deserialise, ok := db.entryTypes[fields[leaderFieldID]]
 		if !ok {
-			msg := fmt.Sprintf("unrecognised entry type [%s]", fields[leaderFieldID])
-			return errors.New(errors.DatabaseReadError, msg, i+1)
+			return curated.Errorf("unrecognised entry type (%s) [line %d]", fields[leaderFieldID], i+1)
 		}
 
 		ent, err = deserialise(strings.Split(fields[numLeaderFields], ","))
 		if err != nil {
-			return errors.New(errors.DatabaseReadError, err, i+1)
+			return curated.Errorf("%v [line %d]", err, i+1)
 		}
 
 		db.entries[key] = ent

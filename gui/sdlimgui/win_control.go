@@ -12,15 +12,14 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package sdlimgui
 
 import (
+	"fmt"
+
 	"github.com/jetsetilly/gopher2600/debugger"
+	"github.com/jetsetilly/gopher2600/gui"
 
 	"github.com/inkyblackness/imgui-go/v2"
 )
@@ -38,6 +37,9 @@ const (
 type winControl struct {
 	windowManagement
 	img *SdlImgui
+
+	rewindWaiting bool
+	rewindTarget  int32
 
 	// widget dimensions
 	stepButtonDim imgui.Vec2
@@ -70,25 +72,18 @@ func (win *winControl) draw() {
 		return
 	}
 
-	imgui.SetNextWindowPosV(imgui.Vec2{641, 277}, imgui.ConditionFirstUseEver, imgui.Vec2{0, 0})
+	imgui.SetNextWindowPosV(imgui.Vec2{651, 228}, imgui.ConditionFirstUseEver, imgui.Vec2{0, 0})
 	imgui.BeginV(winControlTitle, &win.open, imgui.WindowFlagsAlwaysAutoResize)
 
-	if win.img.paused {
-		imgui.PushStyleColor(imgui.StyleColorButton, win.img.cols.ControlRun)
-		imgui.PushStyleColor(imgui.StyleColorButtonHovered, win.img.cols.ControlRunHovered)
-		imgui.PushStyleColor(imgui.StyleColorButtonActive, win.img.cols.ControlRunActive)
-		if imgui.ButtonV(runButtonLabel, win.runButtonDim) {
-			win.img.term.pushCommand("RUN")
-		}
-	} else {
-		imgui.PushStyleColor(imgui.StyleColorButton, win.img.cols.ControlHalt)
-		imgui.PushStyleColor(imgui.StyleColorButtonHovered, win.img.cols.ControlHaltHovered)
-		imgui.PushStyleColor(imgui.StyleColorButtonActive, win.img.cols.ControlHaltActive)
-		if imgui.ButtonV(haltButtonLabel, win.runButtonDim) {
+	if win.img.state == gui.StateRunning {
+		if imguiBooleanButtonV(win.img.cols, false, "Halt", win.runButtonDim) {
 			win.img.term.pushCommand("HALT")
 		}
+	} else {
+		if imguiBooleanButtonV(win.img.cols, true, "Run", win.runButtonDim) {
+			win.img.term.pushCommand("RUN")
+		}
 	}
-	imgui.PopStyleColorV(3)
 
 	win.drawQuantumToggle()
 	imgui.Spacing()
@@ -114,26 +109,90 @@ func (win *winControl) draw() {
 	w -= win.fpsLabelDim.X
 
 	// fps slider
-	fps := win.img.lazy.TV.ReqFPS
+	fps := win.img.lz.TV.ReqFPS
 	imgui.PushItemWidth(w)
 	if imgui.SliderFloatV(fpsLabel, &fps, 0.1, 100, "%.1f", 1.0) {
-		win.img.lazy.Dbg.PushRawEvent(func() { win.img.lazy.Dbg.SetFPS(fps) })
+		win.img.lz.Dbg.PushRawEvent(func() { win.img.lz.Dbg.VCS.TV.SetFPS(fps) })
 	}
 	imgui.PopItemWidth()
 
-	// reset to specifcation rate on right mouse click
+	// reset to specification rate on right mouse click
 	if imgui.IsItemHoveredV(imgui.HoveredFlagsAllowWhenDisabled) && imgui.IsMouseDown(1) {
-		win.img.lazy.Dbg.PushRawEvent(func() { win.img.lazy.Dbg.SetFPS(-1) })
+		win.img.lz.Dbg.PushRawEvent(func() { win.img.lz.Dbg.VCS.TV.SetFPS(-1) })
 	}
 
+	imgui.Spacing()
+	imgui.Separator()
+	imgui.Spacing()
+
+	// rewind sub-system
+	win.drawRewind()
+
 	imgui.End()
+}
+
+func (win *winControl) drawRewind() {
+	imguiText("Rewind:")
+
+	s := int32(win.img.lz.Rewind.Summary.Start)
+	e := int32(win.img.lz.Rewind.Summary.End)
+	f := int32(win.img.lz.TV.Frame)
+
+	changedThisFrame := false
+
+	// forward/backwards buttons
+	imgui.SameLine()
+	if imgui.Button("<") && win.rewindTarget > 0 {
+		win.rewindTarget--
+		win.rewindWaiting = win.img.lz.Dbg.PushRewind(int(win.rewindTarget), win.rewindTarget == e)
+		changedThisFrame = true
+	}
+	imgui.SameLine()
+	if imgui.Button(">") && win.rewindTarget < e {
+		win.rewindTarget++
+		win.rewindWaiting = win.img.lz.Dbg.PushRewind(int(win.rewindTarget), win.rewindTarget == e)
+		changedThisFrame = true
+	}
+
+	// the < and > buttons above will affect the label of the slide below if
+	// we're not careful. use either f or rewindTarget for label, depending on
+	// whether either of those buttons have ben pressed this frame.
+	var label string
+	if changedThisFrame {
+		label = fmt.Sprintf("%d", f)
+	} else {
+		label = fmt.Sprintf("%d", win.rewindTarget)
+	}
+
+	// rewind slider
+	if imgui.SliderIntV("##rewind", &f, s, e, label) || win.rewindWaiting {
+		if win.rewindTarget != f {
+			win.rewindWaiting = win.img.lz.Dbg.PushRewind(int(f), f == e)
+			if !win.rewindWaiting {
+				win.rewindTarget = f
+			}
+		}
+	}
+
+	if !imgui.IsItemActive() {
+		win.rewindTarget = f
+	}
+
+	// alignment information for frame number indicators below
+	align := imguiRightAlignInt32(e)
+
+	// rewind frame information
+	imgui.Text(fmt.Sprintf("%d", s))
+	imgui.SameLine()
+	imgui.SetCursorPos(align)
+	imgui.Text(fmt.Sprintf("%d", e))
 }
 
 func (win *winControl) drawQuantumToggle() {
 	var videoStep bool
 
 	// make sure we know the current state of the debugger
-	if win.img.lazy.Debugger.Quantum == debugger.QuantumVideo {
+	if win.img.lz.Debugger.Quantum == debugger.QuantumVideo {
 		videoStep = true
 	}
 
@@ -145,14 +204,10 @@ func (win *winControl) drawQuantumToggle() {
 	if toggle {
 		stepLabel = videoCycleLabel
 		if videoStep != toggle {
-			videoStep = toggle
 			win.img.term.pushCommand("QUANTUM VIDEO")
 		}
-	} else {
-		if videoStep != toggle {
-			videoStep = toggle
-			win.img.term.pushCommand("QUANTUM CPU")
-		}
+	} else if videoStep != toggle {
+		win.img.term.pushCommand("QUANTUM CPU")
 	}
 
 	imgui.SameLine()

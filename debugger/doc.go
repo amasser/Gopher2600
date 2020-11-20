@@ -12,10 +12,6 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 // Package debugger implements a reaonably comprehensive debugging tool.
 // Features include:
@@ -37,7 +33,7 @@
 //	dbg, _ := debugger.NewDebugger(television, gui, term)
 //
 // The tv, gui and term arguments must be instances of types that satisfy the
-// repsective interfaces. This gives the debugger great flexibility and should
+// respective interfaces. This gives the debugger great flexibility and should
 // allow easy porting to new platforms
 //
 // Interaction with the debugger is primarily through a terminal. The Terminal
@@ -60,12 +56,8 @@
 // package or by hand. The cartloader argument must be an instance of
 // cartloader.
 //
-//
-// Machine interaction with the debugger can be achieved through the terminal
-// interface. For example, setting the debugging quantum can be done by
-// returning a "QUANTUM CPU" string from a terminal.TermRead() implementation.
-//
-// Retrieving information from the debugger is more conveniently and more
-// efficiently achieved with the Get*() commands. For example GetQuantum()
-// returns the emulator's current quantum value.
+// Interaction with the debugger for both user and programs that use the
+// debugger, is through the Terminal interface (see terminal package). Where
+// this is not possible, functions have been provided. For interaction from
+// other goroutines, the PushRawEvent() function should be used.
 package debugger

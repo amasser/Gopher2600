@@ -12,10 +12,6 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package test
 
@@ -31,11 +27,10 @@ func EquateRegisters(t *testing.T, value, expectedValue interface{}) {
 	t.Helper()
 
 	switch value := value.(type) {
-
 	default:
 		t.Fatalf("not a register type (%T)", value)
 
-	case *registers.Register:
+	case registers.Register:
 		switch expectedValue := expectedValue.(type) {
 		default:
 			t.Fatalf("unhandled type (%T)", value)
@@ -46,7 +41,7 @@ func EquateRegisters(t *testing.T, value, expectedValue interface{}) {
 			}
 		}
 
-	case *registers.ProgramCounter:
+	case registers.ProgramCounter:
 		switch expectedValue := expectedValue.(type) {
 		default:
 			t.Fatalf("unhandled type (%T)", value)
@@ -57,7 +52,7 @@ func EquateRegisters(t *testing.T, value, expectedValue interface{}) {
 			}
 		}
 
-	case *registers.StatusRegister:
+	case registers.StatusRegister:
 		switch expectedValue := expectedValue.(type) {
 		default:
 			t.Fatalf("unhandled type (%T)", value)

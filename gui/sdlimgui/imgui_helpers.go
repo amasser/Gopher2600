@@ -12,19 +12,26 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package sdlimgui
 
 import (
+	"math"
+	"strings"
+
 	"github.com/inkyblackness/imgui-go/v2"
 )
 
+// return the height of the window from the current cursor position to the end
+// of the window frame. useful for calculating scroll areas for windows with a
+// static header. the height of a static footer must be subtracted from the
+// returned value.
+func imguiRemainingWinHeight() float32 {
+	return imgui.WindowHeight() - imgui.CursorPosY() - imgui.CurrentStyle().FramePadding().Y*2 - imgui.CurrentStyle().ItemInnerSpacing().Y
+}
+
 // requires the minimum Vec2{} required to fit any of the string values
-// listed in the arguments
+// listed in the arguments.
 func imguiGetFrameDim(s string, t ...string) imgui.Vec2 {
 	w := imgui.CalcTextSize(s, false, 0)
 	for i := range t {
@@ -34,7 +41,54 @@ func imguiGetFrameDim(s string, t ...string) imgui.Vec2 {
 		}
 	}
 	w.Y = imgui.FontSize() + (imgui.CurrentStyle().FramePadding().Y * 2.0)
+
+	// comboboxes in particuar look better with a small amount of trailing space
+	w.X += imgui.CurrentStyle().FramePadding().X
+
 	return w
+}
+
+// returns the pixel width of a text string length characters wide. assumes all
+// characters are of the same width.
+func imguiTextWidth(length int) float32 {
+	return imguiGetFrameDim(strings.Repeat("X", length)).X
+}
+
+// return coordinates for right alignment of previous imgui widget. alignment
+// assumes widget being aligned will have frame padding.
+func imguiRightAlignInt32(n int32) imgui.Vec2 {
+	// take a note of whether number is negative
+	neg := n < 0
+
+	// absolute value of number
+	n = int32(math.Abs(float64(n)))
+
+	// number of decimal digits in number. adding one to avoid (for example) 10 == 1 digit
+	w := math.Ceil(math.Log10(float64(n + 1)))
+
+	// correct -Inf to 1
+	if w <= 0 {
+		w = 1
+	}
+
+	// additional space for negative symbol
+	if neg {
+		w++
+	}
+
+	// this dearimgui dance gets the X position of the end of the last widget.
+	// leaving us with c, a Vec2 with the correct Y position
+	c := imgui.CursorPos()
+	imgui.SameLine()
+	x := imgui.CursorPosX()
+	imgui.SetCursorPos(c)
+	c = imgui.CursorPos()
+
+	// the X coordinate can be set by subtracting the width of the text from
+	// the stored x value
+	c.X = x - imguiTextWidth(int(w)) + imgui.CurrentStyle().FramePadding().X
+
+	return c
 }
 
 // draw toggle button at current cursor position. returns true if toggle has
@@ -81,12 +135,41 @@ func imguiToggleButton(id string, v *bool, col imgui.Vec4) (clicked bool) {
 	return clicked
 }
 
-// calls Text but preceeds it with AlignTextToFramePadding() and follows it
-// with SameLine(). a common enought pattern to warrent a function call
+// button with coloring indicating whether state is true or false. alternative
+// to checkbox.
+func imguiBooleanButton(cols *imguiColors, state bool, text string) bool {
+	return imguiBooleanButtonV(cols, state, text, imgui.Vec2{})
+}
+
+// imguiBooleanButton with dimension argument.
+func imguiBooleanButtonV(cols *imguiColors, state bool, text string, dim imgui.Vec2) bool {
+	if state {
+		imgui.PushStyleColor(imgui.StyleColorButton, cols.True)
+		imgui.PushStyleColor(imgui.StyleColorButtonHovered, cols.True)
+		imgui.PushStyleColor(imgui.StyleColorButtonActive, cols.True)
+	} else {
+		imgui.PushStyleColor(imgui.StyleColorButton, cols.False)
+		imgui.PushStyleColor(imgui.StyleColorButtonHovered, cols.False)
+		imgui.PushStyleColor(imgui.StyleColorButtonActive, cols.False)
+	}
+	b := imgui.ButtonV(text, dim)
+	imgui.PopStyleColorV(3)
+	return b
+}
+
+// calls Text but precedes it with AlignTextToFramePadding() and follows it
+// with SameLine(). a common enought pattern to warrant a function call.
 func imguiText(text string) {
 	imgui.AlignTextToFramePadding()
 	imgui.Text(text)
 	imgui.SameLine()
+}
+
+func imguiIndentText(text string) {
+	p := imgui.CursorPos()
+	p.X += 10
+	imgui.SetCursorPos(p)
+	imgui.Text(text)
 }
 
 // returns a Vec2 suitable for use as a position vector when opening a imgui
@@ -111,9 +194,9 @@ func (img *SdlImgui) imguiWindowQuadrant(p imgui.Vec2) imgui.Vec2 {
 	return q
 }
 
-// use appropriate palette for television spec
+// use appropriate palette for television spec.
 func (img *SdlImgui) imguiTVPalette() (string, packedPalette) {
-	switch img.lazy.TV.Spec.ID {
+	switch img.lz.TV.Spec.ID {
 	case "PAL":
 		return "PAL", img.cols.packedPalettePAL
 	case "NTSC":
@@ -124,16 +207,21 @@ func (img *SdlImgui) imguiTVPalette() (string, packedPalette) {
 }
 
 // draw swatch. returns true if clicked. a good response to a click event is to
-// open up an instance of popupPalette
-func (img *SdlImgui) imguiSwatch(col uint8) (clicked bool) {
+// open up an instance of popupPalette.
+//
+// size argument should be expressed as a fraction the fraction will be applied
+// to imgui.FontSize() to obtain the radius of the swatch.
+func (img *SdlImgui) imguiSwatch(col uint8, size float32) (clicked bool) {
 	_, pal := img.imguiTVPalette()
 	c := pal[col]
 
+	r := imgui.FontSize() * size
+
 	// position & dimensions of swatch
-	r := imgui.FontSize() * 0.75
+	l := imgui.FontSize() * 0.75
 	p := imgui.CursorScreenPos()
 	p.X += r
-	p.Y += r
+	p.Y += l
 
 	// if mouse is clicked in the range of the swatch. very simple detection,
 	// not accounting for the fact that the swatch is visibly circular
@@ -148,7 +236,7 @@ func (img *SdlImgui) imguiSwatch(col uint8) (clicked bool) {
 
 	// set up cursor for next widget
 	p.X += 2 * r
-	p.Y -= r
+	p.Y -= l
 	imgui.SetCursorScreenPos(p)
 
 	return clicked

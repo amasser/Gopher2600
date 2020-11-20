@@ -12,10 +12,6 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package commandline
 
@@ -36,7 +32,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/jetsetilly/gopher2600/errors"
+	"github.com/jetsetilly/gopher2600/curated"
 )
 
 // ParseCommandTemplate turns a string representation of a command template
@@ -79,12 +75,12 @@ func ParseCommandTemplate(template []string) (*Commands, error) {
 		// parse the definition for this command
 		p, d, err := parseDefinition(defn, "")
 		if err != nil {
-			return nil, errors.New(errors.ParserError, fmt.Sprintf("%s [line %d, col %d]", err, t, d))
+			return nil, curated.Errorf("parser: %v", fmt.Errorf("%s [line %d, col %d]", err, t, d))
 		}
 
 		// check that parsing was complete
 		if d < len(defn)-1 {
-			return nil, errors.New(errors.ParserError, fmt.Sprintf("outstanding characters in definition [line %d, col %d]", t, d))
+			return nil, curated.Errorf("parser: %v", fmt.Errorf("outstanding characters in definition [line %d, col %d]", t, d))
 		}
 
 		// add to list of commands (order doesn't matter at this stage)
@@ -379,7 +375,6 @@ func parseDefinition(defn string, trigger string) (*node, int, error) {
 		default:
 			wn.tag += string(defn[i])
 		}
-
 	}
 
 	// make sure we've added working node to the sequence

@@ -12,10 +12,6 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package sdlimgui
 
@@ -24,41 +20,42 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/jetsetilly/gopher2600/gui"
 	"github.com/jetsetilly/gopher2600/hardware/tia/video"
 
 	"github.com/inkyblackness/imgui-go/v2"
 )
 
 func (win *winTIA) drawBall() {
-	lz := win.img.lazy.Ball
-	bl := win.img.lazy.VCS.TIA.Video.Ball
-	pf := win.img.lazy.VCS.TIA.Video.Playfield
+	lz := win.img.lz.Ball
+	bs := win.img.lz.Ball.Bs
+	pf := win.img.lz.Playfield.Pf
 
 	imgui.Spacing()
 
 	imgui.BeginGroup()
 	imguiText("Colour")
 	col := lz.Color
-	if win.img.imguiSwatch(col) {
+	if win.img.imguiSwatch(col, 0.75) {
 		win.popupPalette.request(&col, func() {
-			win.img.lazy.Dbg.PushRawEvent(func() { bl.Color = col })
+			win.img.lz.Dbg.PushRawEvent(func() { bs.Color = col })
 
 			// update playfield color too
-			win.img.lazy.Dbg.PushRawEvent(func() { pf.ForegroundColor = col })
+			win.img.lz.Dbg.PushRawEvent(func() { pf.ForegroundColor = col })
 		})
 	}
 
 	imguiText("Enabled")
 	enb := lz.Enabled
 	if imgui.Checkbox("##enabled", &enb) {
-		win.img.lazy.Dbg.PushRawEvent(func() { bl.Enabled = enb })
+		win.img.lz.Dbg.PushRawEvent(func() { bs.Enabled = enb })
 	}
 
 	imgui.SameLine()
 	imguiText("Enabled Del.")
 	enbd := lz.EnabledDelay
 	if imgui.Checkbox("##enableddelay", &enbd) {
-		win.img.lazy.Dbg.PushRawEvent(func() { bl.EnabledDelay = enbd })
+		win.img.lz.Dbg.PushRawEvent(func() { bs.EnabledDelay = enbd })
 	}
 	imgui.EndGroup()
 
@@ -69,20 +66,18 @@ func (win *winTIA) drawBall() {
 	imgui.BeginGroup()
 	imguiText("HMOVE")
 	imgui.SameLine()
-	imgui.PushItemWidth(win.byteDim.X)
 	hmove := fmt.Sprintf("%01x", lz.Hmove)
-	if imguiHexInput("##hmove", !win.img.paused, 1, &hmove) {
+	if imguiHexInput("##hmove", win.img.state != gui.StatePaused, 1, &hmove) {
 		if v, err := strconv.ParseUint(hmove, 16, 8); err == nil {
-			win.img.lazy.Dbg.PushRawEvent(func() { bl.Hmove = uint8(v) })
+			win.img.lz.Dbg.PushRawEvent(func() { bs.Hmove = uint8(v) })
 		}
 	}
-	imgui.PopItemWidth()
 
 	imgui.SameLine()
 	imgui.PushItemWidth(win.hmoveSliderWidth)
 	hmoveSlider := int32(lz.Hmove) - 8
 	if imgui.SliderIntV("##hmoveslider", &hmoveSlider, -8, 7, "%d") {
-		win.img.lazy.Dbg.PushRawEvent(func() { bl.Hmove = uint8(hmoveSlider + 8) })
+		win.img.lz.Dbg.PushRawEvent(func() { bs.Hmove = uint8(hmoveSlider + 8) })
 	}
 	imgui.PopItemWidth()
 	imgui.EndGroup()
@@ -97,9 +92,9 @@ func (win *winTIA) drawBall() {
 		for k := range video.BallSizes {
 			if imgui.Selectable(video.BallSizes[k]) {
 				v := uint8(k) // being careful about scope
-				win.img.lazy.Dbg.PushRawEvent(func() {
-					bl.Size = v
-					win.img.lazy.VCS.TIA.Video.UpdateCTRLPF()
+				win.img.lz.Dbg.PushRawEvent(func() {
+					bs.Size = v
+					win.img.lz.Dbg.VCS.TIA.Video.UpdateCTRLPF()
 				})
 			}
 		}
@@ -111,32 +106,25 @@ func (win *winTIA) drawBall() {
 	imgui.SameLine()
 	imguiText("CTRLPF")
 	imgui.SameLine()
-	imgui.PushItemWidth(win.byteDim.X)
 	ctrlpf := fmt.Sprintf("%02x", lz.Ctrlpf)
-	if imguiHexInput("##ctrlpf", !win.img.paused, 2, &ctrlpf) {
+	if imguiHexInput("##ctrlpf", win.img.state != gui.StatePaused, 2, &ctrlpf) {
 		if v, err := strconv.ParseUint(ctrlpf, 16, 8); err == nil {
-			win.img.lazy.Dbg.PushRawEvent(func() {
-				bl.SetCTRLPF(uint8(v))
+			win.img.lz.Dbg.PushRawEvent(func() {
+				bs.SetCTRLPF(uint8(v))
 
 				// update playfield CTRLPF too
 				pf.SetCTRLPF(uint8(v))
 			})
 		}
 	}
-	imgui.PopItemWidth()
 
 	s := strings.Builder{}
 	if lz.EncActive {
 		s.WriteString("drawing ")
 		if lz.EncSecondHalf {
-			s.WriteString("2nd half of ")
+			s.WriteString("(2nd half)")
 		}
-		switch lz.EncCpy {
-		case 1:
-			s.WriteString("1st copy")
-		case 2:
-			s.WriteString("2nd copy")
-		}
+		s.WriteString(fmt.Sprintf(" [%d]", lz.EncTicks))
 	}
 	imgui.SameLine()
 	imgui.Text(s.String())

@@ -12,17 +12,15 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package commandline_test
 
 import (
+	"os"
 	"strings"
 	"testing"
 
+	"github.com/bradleyjkemp/memviz"
 	"github.com/jetsetilly/gopher2600/debugger/terminal/commandline"
 	"github.com/jetsetilly/gopher2600/test"
 )
@@ -35,13 +33,17 @@ import (
 // a newline character and also converted to uppercase. this is okay because
 // we're only really interested in how the groupings and branching is
 // represented.
-func expectEquality(t *testing.T, template []string, cmds *commandline.Commands) bool {
+func expectEquality(t *testing.T, template []string, cmds *commandline.Commands) {
 	t.Helper()
-	if strings.ToUpper(strings.Join(template, "\n")) != strings.ToUpper(cmds.String()) {
-		t.Errorf("parsed commands do not match template")
-		return false
+
+	s := strings.ToUpper(strings.Join(template, "\n"))
+	if s != strings.ToUpper(cmds.String()) {
+		if len(template) == 1 {
+			t.Errorf("parsed commands do not match template: %s -> %s", s, cmds)
+		} else {
+			t.Errorf("parsed commands do not match template")
+		}
 	}
-	return true
 }
 
 // dur to the parsing method it's not always possible to recreate the original
@@ -53,7 +55,7 @@ func expectEquality(t *testing.T, template []string, cmds *commandline.Commands)
 // the parsed Commands back through itself. if the results of the second pass
 // are the same as the first then we've successfully parsed the original
 // template.
-func expectEquivalency(t *testing.T, cmds *commandline.Commands) bool {
+func expectEquivalency(t *testing.T, cmds *commandline.Commands) {
 	t.Helper()
 
 	var err error
@@ -61,10 +63,8 @@ func expectEquivalency(t *testing.T, cmds *commandline.Commands) bool {
 	template := strings.Split(cmds.String(), "\n")
 	cmds, err = commandline.ParseCommandTemplate(template)
 	if test.ExpectedSuccess(t, err) {
-		return expectEquality(t, template, cmds)
+		expectEquality(t, template, cmds)
 	}
-
-	return false
 }
 
 func TestParser_optimised(t *testing.T) {
@@ -123,7 +123,6 @@ func TestParser_goodGroupings(t *testing.T) {
 	if test.ExpectedSuccess(t, err) {
 		expectEquality(t, template, cmds)
 	}
-
 }
 
 func TestParser_nestedGroupings(t *testing.T) {
@@ -302,6 +301,38 @@ func TestParser_placeholderLabels(t *testing.T) {
 	}
 
 	cmds, err = commandline.ParseCommandTemplate(template)
+	if test.ExpectedSuccess(t, err) {
+		expectEquivalency(t, cmds)
+		expectEquality(t, template, cmds)
+	}
+}
+
+func TestParser_optional(t *testing.T) {
+	var template []string
+	var cmds *commandline.Commands
+	var err error
+
+	template = []string{
+		"FOO (BAR ([BAZ|QUX] [A|B]))",
+	}
+
+	cmds, err = commandline.ParseCommandTemplate(template)
+	if err != nil {
+		t.Errorf("does not parse: %s", err)
+	}
+
+	f, err := os.Create("memviz.dot")
+	if err != nil {
+		t.Fatalf(err.Error())
+	}
+	defer func() {
+		err = f.Close()
+		if err != nil {
+			t.Fatalf(err.Error())
+		}
+	}()
+	memviz.Map(f, cmds)
+
 	if test.ExpectedSuccess(t, err) {
 		expectEquivalency(t, cmds)
 		expectEquality(t, template, cmds)

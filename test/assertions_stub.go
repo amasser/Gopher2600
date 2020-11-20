@@ -12,19 +12,15 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 // +build !assertions
 
 package test
 
-// AssertMainThread is a stub for when "assertions" build tag is missing
+// AssertMainThread is a stub for when "assertions" build tag is missing.
 func AssertMainThread() {
 }
 
-// AssertNonMainThread is a stub for when "assertions" build tag is missing
+// AssertNonMainThread is a stub for when "assertions" build tag is missing.
 func AssertNonMainThread() {
 }

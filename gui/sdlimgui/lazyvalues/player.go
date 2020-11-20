@@ -12,31 +12,37 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package lazyvalues
 
-import "sync/atomic"
+import (
+	"sync/atomic"
+
+	"github.com/jetsetilly/gopher2600/hardware/tia/video"
+)
 
 // LazyPlayer lazily accesses player information from the emulator.
 type LazyPlayer struct {
-	val *Values
+	val *LazyValues
 	id  int
 
-	atomicResetPixel    atomic.Value // int
-	atomicHmovedPixel   atomic.Value // int
-	atomicColor         atomic.Value // uint8
-	atomicNusiz         atomic.Value // uint8
-	atomicSizeAndCopies atomic.Value // uint8
-	atomicReflected     atomic.Value // bool
-	atomicVerticalDelay atomic.Value // bool
-	atomicHmove         atomic.Value // uint8
-	atomicMoreHmove     atomic.Value // bool
-	atomicGfxDataNew    atomic.Value // uint8
-	atomicGfxDataOld    atomic.Value // uint8
+	ps            atomic.Value // *video.PlayerSprite
+	resetPixel    atomic.Value // int
+	hmovedPixel   atomic.Value // int
+	color         atomic.Value // uint8
+	nusiz         atomic.Value // uint8
+	sizeAndCopies atomic.Value // uint8
+	reflected     atomic.Value // bool
+	verticalDelay atomic.Value // bool
+	hmove         atomic.Value // uint8
+	moreHmove     atomic.Value // bool
+	gfxDataNew    atomic.Value // uint8
+	gfxDataOld    atomic.Value // uint8
+
+	// P is a pointer to the "live" data in the other thread. Do not access
+	// the fields in this struct directly. It can be used in PushRawEvent()
+	// call
+	Ps *video.PlayerSprite
 
 	ResetPixel    int
 	HmovedPixel   int
@@ -50,11 +56,11 @@ type LazyPlayer struct {
 	GfxDataNew    uint8
 	GfxDataOld    uint8
 
-	atomicScanIsActive             atomic.Value // bool
-	atomicScanIsLatching           atomic.Value // bool
-	atomicScanPixel                atomic.Value // int
-	atomicScanCpy                  atomic.Value // int
-	atomicScanLatchedSizeAndCopies atomic.Value // uint8
+	scanIsActive             atomic.Value // bool
+	scanIsLatching           atomic.Value // bool
+	scanPixel                atomic.Value // int
+	scanCpy                  atomic.Value // int
+	scanLatchedSizeAndCopies atomic.Value // uint8
 
 	ScanIsActive             bool
 	ScanIsLatching           bool
@@ -63,47 +69,50 @@ type LazyPlayer struct {
 	ScanLatchedSizeAndCopies uint8
 }
 
-func newLazyPlayer(val *Values, id int) *LazyPlayer {
+func newLazyPlayer(val *LazyValues, id int) *LazyPlayer {
 	return &LazyPlayer{val: val, id: id}
 }
 
-func (lz *LazyPlayer) update() {
-	ps := lz.val.VCS.TIA.Video.Player0
+func (lz *LazyPlayer) push() {
+	pl := lz.val.Dbg.VCS.TIA.Video.Player0
 	if lz.id != 0 {
-		ps = lz.val.VCS.TIA.Video.Player1
+		pl = lz.val.Dbg.VCS.TIA.Video.Player1
 	}
-	lz.val.Dbg.PushRawEvent(func() {
-		lz.atomicResetPixel.Store(ps.ResetPixel)
-		lz.atomicHmovedPixel.Store(ps.HmovedPixel)
-		lz.atomicColor.Store(ps.Color)
-		lz.atomicNusiz.Store(ps.Nusiz)
-		lz.atomicSizeAndCopies.Store(ps.SizeAndCopies)
-		lz.atomicReflected.Store(ps.Reflected)
-		lz.atomicVerticalDelay.Store(ps.VerticalDelay)
-		lz.atomicHmove.Store(ps.Hmove)
-		lz.atomicMoreHmove.Store(ps.MoreHMOVE)
-		lz.atomicGfxDataNew.Store(ps.GfxDataNew)
-		lz.atomicGfxDataOld.Store(ps.GfxDataOld)
-		lz.atomicScanIsActive.Store(ps.ScanCounter.IsActive())
-		lz.atomicScanIsLatching.Store(ps.ScanCounter.IsLatching())
-		lz.atomicScanPixel.Store(ps.ScanCounter.Pixel)
-		lz.atomicScanCpy.Store(ps.ScanCounter.Cpy)
-		lz.atomicScanLatchedSizeAndCopies.Store(ps.ScanCounter.LatchedSizeAndCopies)
-	})
-	lz.ResetPixel, _ = lz.atomicResetPixel.Load().(int)
-	lz.HmovedPixel, _ = lz.atomicHmovedPixel.Load().(int)
-	lz.Color, _ = lz.atomicColor.Load().(uint8)
-	lz.Nusiz, _ = lz.atomicNusiz.Load().(uint8)
-	lz.SizeAndCopies, _ = lz.atomicSizeAndCopies.Load().(uint8)
-	lz.Reflected, _ = lz.atomicReflected.Load().(bool)
-	lz.VerticalDelay, _ = lz.atomicVerticalDelay.Load().(bool)
-	lz.Hmove, _ = lz.atomicHmove.Load().(uint8)
-	lz.MoreHmove, _ = lz.atomicMoreHmove.Load().(bool)
-	lz.GfxDataNew, _ = lz.atomicGfxDataNew.Load().(uint8)
-	lz.GfxDataOld, _ = lz.atomicGfxDataOld.Load().(uint8)
-	lz.ScanIsActive, _ = lz.atomicScanIsActive.Load().(bool)
-	lz.ScanIsLatching, _ = lz.atomicScanIsLatching.Load().(bool)
-	lz.ScanPixel, _ = lz.atomicScanPixel.Load().(int)
-	lz.ScanCpy, _ = lz.atomicScanCpy.Load().(int)
-	lz.ScanLatchedSizeAndCopies, _ = lz.atomicScanLatchedSizeAndCopies.Load().(uint8)
+	lz.ps.Store(pl)
+	lz.resetPixel.Store(pl.ResetPixel)
+	lz.hmovedPixel.Store(pl.HmovedPixel)
+	lz.color.Store(pl.Color)
+	lz.nusiz.Store(pl.Nusiz)
+	lz.sizeAndCopies.Store(pl.SizeAndCopies)
+	lz.reflected.Store(pl.Reflected)
+	lz.verticalDelay.Store(pl.VerticalDelay)
+	lz.hmove.Store(pl.Hmove)
+	lz.moreHmove.Store(pl.MoreHMOVE)
+	lz.gfxDataNew.Store(pl.GfxDataNew)
+	lz.gfxDataOld.Store(pl.GfxDataOld)
+	lz.scanIsActive.Store(pl.ScanCounter.IsActive())
+	lz.scanIsLatching.Store(pl.ScanCounter.IsLatching())
+	lz.scanPixel.Store(pl.ScanCounter.Pixel)
+	lz.scanCpy.Store(pl.ScanCounter.Cpy)
+	lz.scanLatchedSizeAndCopies.Store(pl.ScanCounter.LatchedSizeAndCopies)
+}
+
+func (lz *LazyPlayer) update() {
+	lz.Ps, _ = lz.ps.Load().(*video.PlayerSprite)
+	lz.ResetPixel, _ = lz.resetPixel.Load().(int)
+	lz.HmovedPixel, _ = lz.hmovedPixel.Load().(int)
+	lz.Color, _ = lz.color.Load().(uint8)
+	lz.Nusiz, _ = lz.nusiz.Load().(uint8)
+	lz.SizeAndCopies, _ = lz.sizeAndCopies.Load().(uint8)
+	lz.Reflected, _ = lz.reflected.Load().(bool)
+	lz.VerticalDelay, _ = lz.verticalDelay.Load().(bool)
+	lz.Hmove, _ = lz.hmove.Load().(uint8)
+	lz.MoreHmove, _ = lz.moreHmove.Load().(bool)
+	lz.GfxDataNew, _ = lz.gfxDataNew.Load().(uint8)
+	lz.GfxDataOld, _ = lz.gfxDataOld.Load().(uint8)
+	lz.ScanIsActive, _ = lz.scanIsActive.Load().(bool)
+	lz.ScanIsLatching, _ = lz.scanIsLatching.Load().(bool)
+	lz.ScanPixel, _ = lz.scanPixel.Load().(int)
+	lz.ScanCpy, _ = lz.scanCpy.Load().(int)
+	lz.ScanLatchedSizeAndCopies, _ = lz.scanLatchedSizeAndCopies.Load().(uint8)
 }

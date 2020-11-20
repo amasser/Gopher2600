@@ -12,10 +12,6 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package terminal
 
@@ -24,12 +20,6 @@ import (
 
 	"github.com/jetsetilly/gopher2600/gui"
 )
-
-// Prompt specifies the prompt text and the prompt style.
-type Prompt struct {
-	Content string
-	Style   Style
-}
 
 // Input defines the operations required by an interface that allows input.
 type Input interface {
@@ -57,12 +47,18 @@ type Input interface {
 }
 
 // ReadEvents encapsulates the event channels that need to be monitored during
-// a TermRead
+// a TermRead.
 type ReadEvents struct {
 	GuiEvents       chan gui.Event
 	GuiEventHandler func(gui.Event) error
 	IntEvents       chan os.Signal
-	RawEvents       chan func()
+
+	// RawEvents allows functions to be pushed into the debugger goroutine
+	RawEvents chan func()
+
+	// RawEventsReturn is a variation of RawEvents that returns control to the
+	// input loop as soon as the function is run
+	RawEventsReturn chan func()
 }
 
 // Output defines the operations required by an interface that allows output.
@@ -100,7 +96,13 @@ type TabCompletion interface {
 	Reset()
 }
 
-// Broker implementations can identify a terminal
+// Broker implementations can identify a terminal.
 type Broker interface {
 	GetTerminal() Terminal
 }
+
+// Sentinal errors.
+const (
+	UserInterrupt = "user interrupt"
+	UserAbort     = "user abort"
+)

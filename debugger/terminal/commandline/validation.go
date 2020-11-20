@@ -12,10 +12,6 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package commandline
 
@@ -24,16 +20,16 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/jetsetilly/gopher2600/errors"
+	"github.com/jetsetilly/gopher2600/curated"
 )
 
-// Validate input string against command defintions
+// Validate input string against command defintions.
 func (cmds Commands) Validate(input string) error {
 	return cmds.ValidateTokens(TokeniseInput(input))
 }
 
 // ValidateTokens like Validate, but works on tokens rather than an input
-// string
+// string.
 func (cmds Commands) ValidateTokens(tokens *Tokens) error {
 	cmd, ok := tokens.Peek()
 	if !ok {
@@ -43,27 +39,22 @@ func (cmds Commands) ValidateTokens(tokens *Tokens) error {
 
 	for n := range cmds.cmds {
 		if cmd == cmds.cmds[n].tag {
-
 			err := cmds.cmds[n].validate(tokens, false)
 			if err != nil {
-				// preserve FormattedError type
-				if _, ok := err.(errors.AtariError); ok {
-					return err
-				}
-				return errors.New(errors.ValidationError, err)
+				return err
 			}
 
-			// if we've reached this point and there are still oustanding
+			// if we've reached this point and there are still outstanding
 			// tokens in the queue then something has gone wrong.
 			if tokens.Remaining() > 0 {
 				arg, _ := tokens.Get()
 
 				// special handling for help command
 				if cmd == cmds.helpCommand {
-					return errors.New(errors.ValidationError, fmt.Sprintf("no help for %s", strings.ToUpper(arg)))
+					return curated.Errorf("no help for %s", strings.ToUpper(arg))
 				}
 
-				return errors.New(errors.ValidationError, fmt.Sprintf("unrecognised argument (%s) for %s", arg, cmd))
+				return curated.Errorf("unrecognised argument (%s) for %s", arg, cmd)
 			}
 
 			return nil
@@ -74,47 +65,6 @@ func (cmds Commands) ValidateTokens(tokens *Tokens) error {
 }
 
 func (n *node) validate(tokens *Tokens, speculative bool) error {
-	// we cannot do anything useful with a node with an empty tag, but if there
-	// is a "next" node then we can move immediately to validation of that node
-	// instead.
-	//
-	// empty tags like this, happen as a result of parsing nested groups
-	//
-	// a node with an empty tag but no next array (or a next array with too
-	// many entries) is an illegal node and should not have been parsed
-	if n.tag == "" {
-		if n.next == nil || len(n.next) > 1 {
-			return errors.New(errors.PanicError, "commandline validation", "illegal empty node")
-		}
-
-		// speculatively validate the next node. don't do anything with any
-		// error just yet. if there is an error we need to validate against any
-		// branches. if there is still no match we cam return the error then
-
-		err := n.next[0].validate(tokens, true)
-		match := err == nil
-
-		if !match {
-			for bi := range n.branch {
-				tokens.Unget()
-				if n.branch[bi].validate(tokens, true) == nil {
-					match = true
-					break // for loop
-				}
-			}
-		}
-
-		if match {
-			return nil
-		}
-
-		return err
-	}
-
-	// make a note of the token queue before we proceed. we'll use this to
-	// decide whether to proceed with any repeat loops.
-	remainder := tokens.Remainder()
-
 	// get the next token in the token queue
 	//
 	// in the event of there being no more tokens, then we need to consider
@@ -125,9 +75,59 @@ func (n *node) validate(tokens *Tokens, speculative bool) error {
 	if !ok {
 		// we treat arguments in the root-group as though they are required
 		if n.typ == nodeRequired || n.typ == nodeRoot {
-			return fmt.Errorf("%s required", n.nodeVerbose())
+			return curated.Errorf("%s required", n.nodeVerbose())
 		}
 		return nil
+	}
+
+	// we cannot do anything useful with a node with an empty tag, but if there
+	// is a "next" node then we can move immediately to validation of that node
+	// instead.
+	//
+	// empty tags like this, happen as a result of parsing nested groups
+	//
+	// a node with an empty tag but no next array (or a next array with too
+	// many entries) is an illegal node and should not have been parsed
+	if n.tag == "" {
+		if n.next == nil {
+			// this shouldn't ever happen. return a plain error if it does
+			return fmt.Errorf("commandline validation: illegal empty node")
+		}
+
+		// speculatively validate the next node. don't do anything with any
+		// error just yet. if there is an error we need to validate against any
+		// branches. if there is still no match we cam return the error then
+
+		var err error
+
+		tokens.Unget()
+		for ni := range n.next {
+			err = n.next[ni].validate(tokens, true)
+			if err != nil {
+				break
+			}
+		}
+
+		for bi := range n.branch {
+			tokens.Unget()
+			if n.branch[bi].validate(tokens, true) == nil {
+				return nil
+			}
+		}
+
+		return err
+	}
+
+	// normalise hex notation and update token. this is a blind transformation
+	// regardless of tag type. we originally confined the conversion to the %N
+	// tag type but we want to do this for string types too because address
+	// arguments that allow symbolic addresses in addition to numeric addresses
+	// need to be affected also.
+	//
+	// !!TODO introduce a special purpose "address" tag type?
+	if tok[0] == '$' {
+		tok = fmt.Sprintf("0x%s", tok[1:])
+		tokens.Update(tok)
 	}
 
 	// check the current token against the node's tag, using placeholder
@@ -147,12 +147,6 @@ func (n *node) validate(tokens *Tokens, speculative bool) error {
 
 	switch n.tag {
 	case "%N":
-		// normalise hex notation and update token
-		if tok[0] == '$' {
-			tok = fmt.Sprintf("0x%s", tok[1:])
-		}
-		tokens.Update(tok)
-
 		_, e := strconv.ParseInt(tok, 0, 32)
 		match = e == nil
 
@@ -181,8 +175,7 @@ func (n *node) validate(tokens *Tokens, speculative bool) error {
 		// catch-all "unrecognised argument" message (see below).
 
 	case "%S":
-		tentativeMatch = true
-		match = n.branch == nil
+		match = true
 
 	case "%F":
 		// not checking for file existence
@@ -204,7 +197,7 @@ func (n *node) validate(tokens *Tokens, speculative bool) error {
 	// if input doesn't match this node we need to check branches. we may well
 	// have a tentative match at this point but we need to put that to one side
 	// until we've checked all other options.
-	if !match && n.branch != nil {
+	if !match {
 		for bi := range n.branch {
 			tokens.Unget()
 
@@ -219,7 +212,7 @@ func (n *node) validate(tokens *Tokens, speculative bool) error {
 	}
 
 	if !match {
-		err := fmt.Errorf("unrecognised argument (%s)", tok)
+		err := curated.Errorf("unrecognised argument (%s)", tok)
 
 		// there's still no match but the speculative flag means we were half
 		// expecting it. return error without further consideration
@@ -242,6 +235,8 @@ func (n *node) validate(tokens *Tokens, speculative bool) error {
 		//
 		// The Unget() function "pushes" the current token back onto the queue.
 		tokens.Unget()
+
+		return nil
 	}
 
 	// check nodes that follow on from the current node
@@ -255,7 +250,7 @@ func (n *node) validate(tokens *Tokens, speculative bool) error {
 	// no more nodes in the next array. move to the repeat node if there is one
 	// and if the tokens queue has changed since the beginning of this
 	// function.
-	if n.repeat != nil && remainder != tokens.Remainder() {
+	if n.repeat != nil && tokens.Remaining() > 0 {
 		err := n.repeat.validate(tokens, false)
 		if err != nil {
 			return err

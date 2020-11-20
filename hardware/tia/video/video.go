@@ -12,40 +12,86 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package video
 
 import (
-	"github.com/jetsetilly/gopher2600/hardware/memory/addresses"
 	"github.com/jetsetilly/gopher2600/hardware/memory/bus"
-	"github.com/jetsetilly/gopher2600/hardware/tia/future"
+	"github.com/jetsetilly/gopher2600/hardware/television/signal"
+	"github.com/jetsetilly/gopher2600/hardware/tia/delay"
 	"github.com/jetsetilly/gopher2600/hardware/tia/phaseclock"
 	"github.com/jetsetilly/gopher2600/hardware/tia/polycounter"
-	"github.com/jetsetilly/gopher2600/television"
-	"github.com/jetsetilly/gopher2600/television/colors"
 )
 
-// Video contains all the components of the video sub-system of the VCS TIA chip
-type Video struct {
-	// collision matrix
-	collisions *collisions
+// Element is used to record from which video sub-system the pixel
+// was generated, taking video priority into account.
+type Element int
 
-	// playfield
-	Playfield *playfield
+// List of valid Element Signals.
+const (
+	ElementBackground Element = iota
+	ElementBall
+	ElementPlayfield
+	ElementPlayer0
+	ElementPlayer1
+	ElementMissile0
+	ElementMissile1
+)
 
-	// sprite objects
-	Player0  *playerSprite
-	Player1  *playerSprite
-	Missile0 *missileSprite
-	Missile1 *missileSprite
-	Ball     *ballSprite
+func (e Element) String() string {
+	switch e {
+	case ElementBackground:
+		return "Background"
+	case ElementBall:
+		return "Ball"
+	case ElementPlayfield:
+		return "Playfield"
+	case ElementPlayer0:
+		return "Player 0"
+	case ElementPlayer1:
+		return "Player 1"
+	case ElementMissile0:
+		return "Missile 0"
+	case ElementMissile1:
+		return "Missile 1"
+	}
+	panic("unknown video element")
 }
 
-// NewVideo is the preferred method of initialisation for the Video structure.
+// Video contains all the components of the video sub-system of the VCS TIA chip.
+type Video struct {
+	// collision matrix
+	Collisions *Collisions
+
+	// playfield
+	Playfield *Playfield
+
+	// sprite objects
+	Player0  *PlayerSprite
+	Player1  *PlayerSprite
+	Missile0 *MissileSprite
+	Missile1 *MissileSprite
+	Ball     *BallSprite
+
+	// LastElement records from which TIA video sub-system the most recent
+	// pixel was generated, taking priority into account. see Pixel() function
+	// for details
+	LastElement Element
+
+	// keeping track of whether any sprite element has changed since last call
+	// to Pixel(). we use this for some small optimisations
+	spriteHasChanged    bool
+	lastPlayfieldActive bool
+	lastPixelColor      uint8
+	Unchanged           bool
+
+	// some register writes require a small latching delay. they never overlap
+	// so one event is sufficient
+	writing         delay.Event
+	writingRegister string
+}
+
+// NewVideo is the preferred method of initialisation for the Video sub-system.
 //
 // The playfield type requires access access to the TIA's phaseclock and
 // polyucounter and is used to decide which part of the playfield is to be
@@ -53,61 +99,48 @@ type Video struct {
 //
 // The sprites meanwhile require access to the television. This is for
 // generating information about the sprites reset position - a debugging only
-// requirement but of minimal performance related consequeunce.
+// requirement but of no performance related consequeunce.
 //
 // The references to the TIA's HBLANK state and whether HMOVE is latched, are
 // required to tune the delays experienced by the various sprite events (eg.
 // reset position).
-func NewVideo(mem bus.ChipBus,
-	pclk *phaseclock.PhaseClock, hsync *polycounter.Polycounter,
-	tv television.Television, hblank, hmoveLatch *bool) (*Video, error) {
-
-	vd := &Video{
-		collisions: newCollisions(mem),
+func NewVideo(mem bus.ChipBus, tv signal.TelevisionSprite, pclk *phaseclock.PhaseClock, hsync *polycounter.Polycounter, hblank *bool, hmoveLatch *bool) *Video {
+	return &Video{
+		Collisions: newCollisions(mem),
 		Playfield:  newPlayfield(pclk, hsync),
+		Player0:    newPlayerSprite("Player 0", tv, hblank, hmoveLatch),
+		Player1:    newPlayerSprite("Player 1", tv, hblank, hmoveLatch),
+		Missile0:   newMissileSprite("Missile 0", tv, hblank, hmoveLatch),
+		Missile1:   newMissileSprite("Missile 1", tv, hblank, hmoveLatch),
+		Ball:       newBallSprite("Ball", tv, hblank, hmoveLatch),
 	}
+}
 
-	var err error
+// Snapshot creates a copy of the Video sub-system in its current state.
+func (vd *Video) Snapshot() *Video {
+	n := *vd
+	n.Collisions = vd.Collisions.Snapshot()
+	n.Playfield = vd.Playfield.Snapshot()
+	n.Player0 = vd.Player0.Snapshot()
+	n.Player1 = vd.Player1.Snapshot()
+	n.Missile0 = vd.Missile0.Snapshot()
+	n.Missile1 = vd.Missile1.Snapshot()
+	n.Ball = vd.Ball.Snapshot()
+	return &n
+}
 
-	// sprite objects
-	vd.Player0, err = newPlayerSprite("Player 0", tv, hblank, hmoveLatch)
-	if err != nil {
-		return nil, err
-	}
-	vd.Player1, err = newPlayerSprite("Player 1", tv, hblank, hmoveLatch)
-	if err != nil {
-		return nil, err
-	}
-	vd.Missile0, err = newMissileSprite("Missile 0", tv, hblank, hmoveLatch)
-	if err != nil {
-		return nil, err
-	}
-	vd.Missile1, err = newMissileSprite("Missile 1", tv, hblank, hmoveLatch)
-	if err != nil {
-		return nil, err
-	}
-	vd.Ball, err = newBallSprite("Ball", tv, hblank, hmoveLatch)
-	if err != nil {
-		return nil, err
-	}
-
-	// connect player 0 and player 1 to each other
-	vd.Player0.otherPlayer = vd.Player1
-	vd.Player1.otherPlayer = vd.Player0
-
-	// connect ball to player 1 only - ball sprite's delayed enable set when
-	// gfx register of player 1 is written
-	vd.Player1.ball = vd.Ball
-
-	// connect missile sprite to its parent player sprite
-	vd.Missile0.parentPlayer = vd.Player0
-	vd.Missile1.parentPlayer = vd.Player1
-
-	return vd, nil
+func (vd *Video) Plumb(mem bus.ChipBus, pclk *phaseclock.PhaseClock, hsync *polycounter.Polycounter, hblank *bool, hmoveLatch *bool) {
+	vd.Collisions.Plumb(mem)
+	vd.Playfield.Plumb(pclk, hsync)
+	vd.Player0.Plumb(hblank, hmoveLatch)
+	vd.Player1.Plumb(hblank, hmoveLatch)
+	vd.Missile0.Plumb(hblank, hmoveLatch)
+	vd.Missile1.Plumb(hblank, hmoveLatch)
+	vd.Ball.Plumb(hblank, hmoveLatch)
 }
 
 // RSYNC adjusts the debugging information of the sprites when an RSYNC is
-// triggered
+// triggered.
 func (vd *Video) RSYNC(adjustment int) {
 	vd.Player0.rsync(adjustment)
 	vd.Player1.rsync(adjustment)
@@ -119,14 +152,42 @@ func (vd *Video) RSYNC(adjustment int) {
 // Tick moves all video elements forward one video cycle. This is the
 // conceptual equivalent of the hardware MOTCK line.
 func (vd *Video) Tick(visible, hmove bool, hmoveCt uint8) {
-	vd.Player0.tick(visible, hmove, hmoveCt)
-	vd.Player1.tick(visible, hmove, hmoveCt)
-	vd.Missile0.tick(visible, hmove, hmoveCt)
-	vd.Missile1.tick(visible, hmove, hmoveCt)
-	vd.Ball.tick(visible, hmove, hmoveCt)
+	if v, ok := vd.writing.Tick(); ok {
+		switch vd.writingRegister {
+		case "PF0":
+			vd.Playfield.setPF0(v)
+		case "PF1":
+			vd.Playfield.setPF1(v)
+		case "PF2":
+			vd.Playfield.setPF2(v)
+		case "HMP0":
+			vd.Player0.setHmoveValue(v)
+		case "HMP1":
+			vd.Player1.setHmoveValue(v)
+		case "HMM0":
+			vd.Missile0.setHmoveValue(v)
+		case "HMM1":
+			vd.Missile1.setHmoveValue(v)
+		case "HMBL":
+			vd.Ball.setHmoveValue(v)
+		case "HMCLR":
+			vd.Player0.clearHmoveValue()
+			vd.Player1.clearHmoveValue()
+			vd.Missile0.clearHmoveValue()
+			vd.Missile1.clearHmoveValue()
+			vd.Ball.clearHmoveValue()
+		}
+	}
+
+	p0 := vd.Player0.tick(visible, hmove, hmoveCt)
+	p1 := vd.Player1.tick(visible, hmove, hmoveCt)
+	m0 := vd.Missile0.tick(visible, hmove, hmoveCt, vd.Player0.triggerMissileReset())
+	m1 := vd.Missile1.tick(visible, hmove, hmoveCt, vd.Player1.triggerMissileReset())
+	bl := vd.Ball.tick(visible, hmove, hmoveCt)
+	vd.spriteHasChanged = vd.spriteHasChanged || p0 || p1 || m0 || m1 || bl
 }
 
-// PrepareSpritesForHMOVE should be called whenever HMOVE is triggered
+// PrepareSpritesForHMOVE should be called whenever HMOVE is triggered.
 func (vd *Video) PrepareSpritesForHMOVE() {
 	vd.Player0.prepareForHMOVE()
 	vd.Player1.prepareForHMOVE()
@@ -138,9 +199,23 @@ func (vd *Video) PrepareSpritesForHMOVE() {
 // Pixel returns the color of the pixel at the current clock and also sets the
 // collision registers. It will default to returning the background color if no
 // sprite or playfield pixel is present.
-func (vd *Video) Pixel() (uint8, colors.AltColor) {
-	bgc := vd.Playfield.BackgroundColor
+func (vd *Video) Pixel() uint8 {
 	pfa, pfc := vd.Playfield.pixel()
+
+	// optimisation: if nothing has changed since last pixel then return early
+	// with the color of the previous pixel. note that we're not optimising
+	// based on whether video is on/off (ie. VBLANK/HBLANK)
+	if !vd.spriteHasChanged && (!pfa || (pfa && !vd.lastPlayfieldActive)) {
+		vd.spriteHasChanged = false
+		vd.lastPlayfieldActive = pfa
+		vd.Unchanged = true
+		return vd.lastPixelColor
+	}
+	vd.spriteHasChanged = false
+	vd.lastPlayfieldActive = pfa
+	vd.Unchanged = false
+
+	bgc := vd.Playfield.BackgroundColor
 	p0a, p0c, p0k := vd.Player0.pixel()
 	p1a, p1c, p1k := vd.Player1.pixel()
 	m0a, m0c, m0k := vd.Missile0.pixel()
@@ -152,83 +227,11 @@ func (vd *Video) Pixel() (uint8, colors.AltColor) {
 	// other sprites. it is not used when detecting collisions with the
 	// playfield. for playfield collisions we just use the active condition
 	// (the first returned value)
-
-	if m0k && p1k {
-		vd.collisions.cxm0p |= 0x80
-		vd.collisions.setMemory(addresses.CXM0P)
-	}
-	if m0k && p0k {
-		vd.collisions.cxm0p |= 0x40
-		vd.collisions.setMemory(addresses.CXM0P)
-	}
-
-	if m1k && p0k {
-		vd.collisions.cxm1p |= 0x80
-		vd.collisions.setMemory(addresses.CXM1P)
-	}
-	if m1k && p1k {
-		vd.collisions.cxm1p |= 0x40
-		vd.collisions.setMemory(addresses.CXM1P)
-	}
-
-	// use active bit when comparing with playfield
-	if p0a && pfa {
-		vd.collisions.cxp0fb |= 0x80
-		vd.collisions.setMemory(addresses.CXP0FB)
-	}
-	if p0k && blk {
-		vd.collisions.cxp0fb |= 0x40
-		vd.collisions.setMemory(addresses.CXP0FB)
-	}
-
-	// use active bit when comparing with playfield
-	if p1a && pfa {
-		vd.collisions.cxp1fb |= 0x80
-		vd.collisions.setMemory(addresses.CXP1FB)
-	}
-	if p1k && blk {
-		vd.collisions.cxp1fb |= 0x40
-		vd.collisions.setMemory(addresses.CXP1FB)
-	}
-
-	// use active bit when comparing with playfield
-	if m0a && pfa {
-		vd.collisions.cxm0fb |= 0x80
-		vd.collisions.setMemory(addresses.CXM0FB)
-	}
-	if m0k && blk {
-		vd.collisions.cxm0fb |= 0x40
-		vd.collisions.setMemory(addresses.CXM0FB)
-	}
-
-	// use active bit when comparing with playfield
-	if m1a && pfa {
-		vd.collisions.cxm1fb |= 0x80
-		vd.collisions.setMemory(addresses.CXM1FB)
-	}
-	if m1k && blk {
-		vd.collisions.cxm1fb |= 0x40
-		vd.collisions.setMemory(addresses.CXM1FB)
-	}
-
-	if blk && pfa {
-		vd.collisions.cxblpf |= 0x80
-		vd.collisions.setMemory(addresses.CXBLPF)
-	}
-	// no bit 6 for CXBLPF
-
-	if p0k && p1k {
-		vd.collisions.cxppmm |= 0x80
-		vd.collisions.setMemory(addresses.CXPPMM)
-	}
-	if m0k && m1k {
-		vd.collisions.cxppmm |= 0x40
-		vd.collisions.setMemory(addresses.CXPPMM)
-	}
+	vd.Collisions.tick(p0k, p1k, m0k, m1k, blk, pfa)
 
 	// apply priorities to get pixel color
 	var col uint8
-	var altCol colors.AltColor
+	var element Element
 
 	// the interaction of the priority and scoremode bits are a little more
 	// complex than at first glance:
@@ -261,39 +264,39 @@ func (vd *Video) Pixel() (uint8, colors.AltColor) {
 				col = pfc
 			}
 
-			altCol = colors.AltColPlayfield
+			element = ElementPlayfield
 		} else if bla {
 			col = blc
-			altCol = colors.AltColBall
+			element = ElementBall
 		} else if p0a { // priority 2
 			col = p0c
-			altCol = colors.AltColPlayer0
+			element = ElementPlayer0
 		} else if m0a {
 			col = m0c
-			altCol = colors.AltColMissile0
+			element = ElementMissile0
 		} else if p1a { // priority 3
 			col = p1c
-			altCol = colors.AltColPlayer1
+			element = ElementPlayer1
 		} else if m1a {
 			col = m1c
-			altCol = colors.AltColMissile1
+			element = ElementMissile1
 		} else {
 			col = bgc
-			altCol = colors.AltColBackground
+			element = ElementBackground
 		}
 	} else {
 		if p0a { // priority 1
 			col = p0c
-			altCol = colors.AltColPlayer0
+			element = ElementPlayer0
 		} else if m0a {
 			col = m0c
-			altCol = colors.AltColMissile0
+			element = ElementMissile0
 		} else if p1a { // priority 2
 			col = p1c
-			altCol = colors.AltColPlayer1
+			element = ElementPlayer1
 		} else if m1a {
 			col = m1c
-			altCol = colors.AltColMissile1
+			element = ElementMissile1
 		} else if vd.Playfield.Scoremode && (bla || pfa) {
 			// priority 3 (scoremode without priority bit)
 			if pfa {
@@ -304,45 +307,53 @@ func (vd *Video) Pixel() (uint8, colors.AltColor) {
 				case RegionRight:
 					col = p1c
 				}
-				altCol = colors.AltColPlayfield
+				element = ElementPlayfield
 			} else if bla { // priority 3
 				col = blc
-				altCol = colors.AltColBall
+				element = ElementBall
 			}
 		} else {
 			// priority 3 (no scoremode or priority bit)
 			if bla { // priority 3
 				col = blc
-				altCol = colors.AltColBall
+				element = ElementBall
 			} else if pfa {
 				col = pfc
-				altCol = colors.AltColPlayfield
+				element = ElementPlayfield
 			} else {
 				col = bgc
-				altCol = colors.AltColBackground
+				element = ElementBackground
 			}
 		}
-
 	}
 
+	vd.LastElement = element
+	vd.lastPixelColor = col
+
 	// priority 4
-	return col, altCol
+	return col
 }
 
 // UpdatePlayfield checks TIA memory for new playfield data. Note that CTRLPF
 // is serviced in UpdateSpriteVariations().
 //
 // Returns true if ChipData has *not* been serviced.
-func (vd *Video) UpdatePlayfield(tiaDelay future.Scheduler, data bus.ChipData) bool {
+func (vd *Video) UpdatePlayfield(data bus.ChipData) bool {
 	// homebrew Donkey Kong shows the need for a delay of at least two cycles
 	// to write new playfield data
 	switch data.Name {
 	case "PF0":
-		tiaDelay.ScheduleWithArg(2, vd.Playfield.setPF0, data.Value, "PF0")
+		vd.writingRegister = "PF0"
+		vd.writing.Schedule(2, data.Value)
 	case "PF1":
-		tiaDelay.ScheduleWithArg(2, vd.Playfield.setPF1, data.Value, "PF1")
+		vd.writingRegister = "PF1"
+		vd.writing.Schedule(2, data.Value)
 	case "PF2":
-		tiaDelay.ScheduleWithArg(2, vd.Playfield.setPF2, data.Value, "PF2")
+		vd.writingRegister = "PF2"
+		vd.writing.Schedule(2, data.Value)
+	case "VDELBL":
+		vd.spriteHasChanged = true
+		vd.Ball.setVerticalDelay(data.Value&0x01 == 0x01)
 	default:
 		return true
 	}
@@ -353,7 +364,7 @@ func (vd *Video) UpdatePlayfield(tiaDelay future.Scheduler, data bus.ChipData) b
 // UpdateSpriteHMOVE checks TIA memory for changes in sprite HMOVE settings.
 //
 // Returns true if ChipData has *not* been serviced.
-func (vd *Video) UpdateSpriteHMOVE(tiaDelay future.Scheduler, data bus.ChipData) bool {
+func (vd *Video) UpdateSpriteHMOVE(data bus.ChipData) bool {
 	switch data.Name {
 	// horizontal movement values range from -8 to +7 for convenience we
 	// convert this to the range 0 to 15. from TIA_HW_Notes.txt:
@@ -387,25 +398,29 @@ func (vd *Video) UpdateSpriteHMOVE(tiaDelay future.Scheduler, data bus.ChipData)
 	// the only common value that satisfies all test cases is 1, which equates
 	// to a delay of two cycles
 	case "HMP0":
-		tiaDelay.ScheduleWithArg(1, vd.Player0.setHmoveValue, data.Value&0xf0, "HMPx")
+		vd.writingRegister = "HMP0"
+		vd.writing.Schedule(1, data.Value&0xf0)
 	case "HMP1":
-		tiaDelay.ScheduleWithArg(1, vd.Player1.setHmoveValue, data.Value&0xf0, "HMPx")
+		vd.writingRegister = "HMP1"
+		vd.writing.Schedule(1, data.Value&0xf0)
 	case "HMM0":
-		tiaDelay.ScheduleWithArg(1, vd.Missile0.setHmoveValue, data.Value&0xf0, "HMMx")
+		vd.writingRegister = "HMM0"
+		vd.writing.Schedule(1, data.Value&0xf0)
 	case "HMM1":
-		tiaDelay.ScheduleWithArg(1, vd.Missile1.setHmoveValue, data.Value&0xf0, "HMMx")
+		vd.writingRegister = "HMM1"
+		vd.writing.Schedule(1, data.Value&0xf0)
 	case "HMBL":
-		tiaDelay.ScheduleWithArg(1, vd.Ball.setHmoveValue, data.Value&0xf0, "HMBL")
+		vd.writingRegister = "HMBL"
+		vd.writing.Schedule(1, data.Value&0xf0)
 	case "HMCLR":
-		tiaDelay.Schedule(1, vd.Player0.clearHmoveValue, "HMCLR")
-		tiaDelay.Schedule(1, vd.Player1.clearHmoveValue, "HMCLR")
-		tiaDelay.Schedule(1, vd.Missile0.clearHmoveValue, "HMCLR")
-		tiaDelay.Schedule(1, vd.Missile1.clearHmoveValue, "HMCLR")
-		tiaDelay.Schedule(1, vd.Ball.clearHmoveValue, "HMCLR")
+		vd.writingRegister = "HMCLR"
+		vd.writing.Schedule(1, 0)
+
 	default:
 		return true
 	}
 
+	vd.spriteHasChanged = true
 	return false
 }
 
@@ -430,6 +445,7 @@ func (vd *Video) UpdateSpritePositioning(data bus.ChipData) bool {
 		return true
 	}
 
+	vd.spriteHasChanged = true
 	return false
 }
 
@@ -467,8 +483,13 @@ func (vd *Video) UpdateSpritePixels(data bus.ChipData) bool {
 	switch data.Name {
 	case "GRP0":
 		vd.Player0.setGfxData(data.Value)
+		vd.Player1.setOldGfxData()
+
 	case "GRP1":
 		vd.Player1.setGfxData(data.Value)
+		vd.Player0.setOldGfxData()
+		vd.Ball.setEnableDelay()
+
 	case "ENAM0":
 		vd.Missile0.setEnable(data.Value&0x02 == 0x02)
 	case "ENAM1":
@@ -479,6 +500,7 @@ func (vd *Video) UpdateSpritePixels(data bus.ChipData) bool {
 		return true
 	}
 
+	vd.spriteHasChanged = true
 	return false
 }
 
@@ -492,8 +514,6 @@ func (vd *Video) UpdateSpriteVariations(data bus.ChipData) bool {
 	case "CTRLPF":
 		vd.Ball.SetCTRLPF(data.Value)
 		vd.Playfield.SetCTRLPF(data.Value)
-	case "VDELBL":
-		vd.Ball.setVerticalDelay(data.Value&0x01 == 0x01)
 	case "VDELP0":
 		vd.Player0.SetVerticalDelay(data.Value&0x01 == 0x01)
 	case "VDELP1":
@@ -513,11 +533,12 @@ func (vd *Video) UpdateSpriteVariations(data bus.ChipData) bool {
 		vd.Player1.setNUSIZ(data.Value)
 		vd.Missile1.SetNUSIZ(data.Value)
 	case "CXCLR":
-		vd.collisions.clear()
+		vd.Collisions.Clear()
 	default:
 		return true
 	}
 
+	vd.spriteHasChanged = true
 	return false
 }
 
@@ -544,6 +565,7 @@ func (vd *Video) UpdateCTRLPF() {
 
 	vd.Playfield.Ctrlpf = ctrlpf
 	vd.Ball.Ctrlpf = ctrlpf
+	vd.spriteHasChanged = true
 }
 
 // UpdateNUSIZ should be called whenever the player/missile size/copies
@@ -582,4 +604,5 @@ func (vd *Video) UpdateNUSIZ(num int, fromMissile bool) {
 		vd.Player1.Nusiz = nusiz
 		vd.Missile1.Nusiz = nusiz
 	}
+	vd.spriteHasChanged = true
 }

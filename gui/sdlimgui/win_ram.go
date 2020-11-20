@@ -12,10 +12,6 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package sdlimgui
 
@@ -23,46 +19,25 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/jetsetilly/gopher2600/hardware/memory/cartridge"
-
 	"github.com/inkyblackness/imgui-go/v2"
+	"github.com/jetsetilly/gopher2600/gui"
+	"github.com/jetsetilly/gopher2600/hardware/memory/memorymap"
 )
 
 const winRAMTitle = "RAM"
 
 type winRAM struct {
 	windowManagement
+
 	img *SdlImgui
-
-	// for convenience we represent internal VCS RAM using the RAMinfo struct
-	// from the cartridge package. this facilitates the drawGrid() function
-	// below.
-	vcsRAMinfo cartridge.RAMinfo
-
-	// widget dimensions
-	byteDim imgui.Vec2
-
-	// we know this value after the first pass
-	headerRowStart float32
 }
 
 func newWinRAM(img *SdlImgui) (managedWindow, error) {
-	win := &winRAM{
-		img: img,
-		vcsRAMinfo: cartridge.RAMinfo{
-			Label:       "VCS",
-			ReadOrigin:  0x80,
-			ReadMemtop:  0xff,
-			WriteOrigin: 0x80,
-			WriteMemtop: 0xff,
-		},
-	}
-
+	win := &winRAM{img: img}
 	return win, nil
 }
 
 func (win *winRAM) init() {
-	win.byteDim = imguiGetFrameDim("FF")
 }
 
 func (win *winRAM) destroy() {
@@ -72,7 +47,6 @@ func (win *winRAM) id() string {
 	return winRAMTitle
 }
 
-// draw is called by service loop
 func (win *winRAM) draw() {
 	if !win.open {
 		return
@@ -81,79 +55,72 @@ func (win *winRAM) draw() {
 	imgui.SetNextWindowPosV(imgui.Vec2{890, 29}, imgui.ConditionFirstUseEver, imgui.Vec2{0, 0})
 	imgui.BeginV(winRAMTitle, &win.open, imgui.WindowFlagsAlwaysAutoResize)
 
-	if len(win.img.lazy.Cart.RAMinfo) > 0 {
-		imgui.BeginTabBar("")
-		if imgui.BeginTabItemV(win.vcsRAMinfo.Label, nil, 0) {
-			win.drawGrid(win.vcsRAMinfo)
-			imgui.EndTabItem()
-		}
-		for i := 0; i < len(win.img.lazy.Cart.RAMinfo); i++ {
-			if win.img.lazy.Cart.RAMinfo[i].Active {
-				if imgui.BeginTabItemV(win.img.lazy.Cart.RAMinfo[i].Label, nil, 0) {
-					win.drawGrid(win.img.lazy.Cart.RAMinfo[i])
-					imgui.EndTabItem()
-				}
-			}
-		}
-		imgui.EndTabBar()
-	} else {
-		win.drawGrid(win.vcsRAMinfo)
-	}
-
-	imgui.End()
-}
-
-func (win *winRAM) drawGrid(raminfo cartridge.RAMinfo) {
-	// no spacing between any of the items in the RAM window
 	imgui.PushStyleVarVec2(imgui.StyleVarItemSpacing, imgui.Vec2{})
+	imgui.PushItemWidth(imguiTextWidth(2))
 
-	// draw headers for each column. this relies on headerRowStart, which requires 1
-	// frame to decide before it is accurate.
-	headerDim := imgui.Vec2{X: win.headerRowStart, Y: imgui.CursorPosY()}
+	// draw headers for each column
+	headerDim := imgui.Vec2{X: imguiTextWidth(4), Y: imgui.CursorPosY()}
 	for i := 0; i < 16; i++ {
 		imgui.SetCursorPos(headerDim)
-		headerDim.X += win.byteDim.X
+		headerDim.X += imguiTextWidth(2)
 		imgui.AlignTextToFramePadding()
 		imgui.Text(fmt.Sprintf("-%x", i))
 	}
 
 	// draw rows
-	imgui.PushItemWidth(win.byteDim.X)
-	i := uint16(0)
-	for readAddr := raminfo.ReadOrigin; readAddr <= raminfo.ReadMemtop; readAddr++ {
+	for i := 0; i < len(win.img.lz.RAM.RAM); i++ {
+		addr := memorymap.OriginRAM + uint16(i)
+
 		// draw row header
 		if i%16 == 0 {
 			imgui.AlignTextToFramePadding()
-			imgui.Text(fmt.Sprintf("%02x- ", readAddr/16))
+			imgui.Text(fmt.Sprintf("%02x- ", addr/16))
 			imgui.SameLine()
-			win.headerRowStart = imgui.CursorPosX()
 		} else {
 			imgui.SameLine()
 		}
-		win.drawEditByte(raminfo, readAddr, raminfo.WriteOrigin+i)
-		i++
-	}
-	imgui.PopItemWidth()
 
-	// finished with spacing setting
-	imgui.PopStyleVar()
-}
+		// editable byte
+		d := win.img.lz.RAM.RAM[i]
 
-func (win *winRAM) drawEditByte(raminfo cartridge.RAMinfo, readAddr uint16, writeAddr uint16) {
-	d := win.img.lazy.ReadRAM(raminfo, readAddr)
+		// compare current RAM value with value in comparison snapshot and use
+		// highlight color if it is different
+		e := d
+		if win.img.lz.Rewind.Comparison != nil {
+			e = win.img.lz.Rewind.Comparison.Mem.RAM.RAM[i]
+		}
+		if d != e {
+			imgui.PushStyleColor(imgui.StyleColorFrameBg, win.img.cols.RAMDiff)
+		}
 
-	label := fmt.Sprintf("##%d", readAddr)
-	content := fmt.Sprintf("%02x", d)
+		b := fmt.Sprintf("%02x", d)
+		if imguiHexInput(fmt.Sprintf("##%d", addr), win.img.state != gui.StatePaused, 2, &b) {
+			if v, err := strconv.ParseUint(b, 16, 8); err == nil {
+				a := addr // we have to make a copy of the address
+				win.img.lz.Dbg.PushRawEvent(func() {
+					win.img.lz.Dbg.VCS.Mem.Write(a, uint8(v))
+				})
+			}
+		}
 
-	if imguiHexInput(label, !win.img.paused, 2, &content) {
-		if v, err := strconv.ParseUint(content, 16, 8); err == nil {
-			// we don't know if this address is from the internal RAM or from
-			// an area of cartridge RAM. for this reason we're sending the
-			// write through the high-level memory write, which will map the
-			// address for us.
-			win.img.lazy.Dbg.PushRawEvent(func() {
-				win.img.lazy.VCS.Mem.Write(writeAddr, uint8(v))
-			})
+		// undo any color changes
+		if imgui.IsItemHovered() {
+			win.drawSnapshotInfo(d, e)
+		}
+
+		if d != e {
+			imgui.PopStyleColor()
 		}
 	}
+
+	imgui.PopItemWidth()
+	imgui.PopStyleVar()
+
+	imgui.End()
+}
+
+func (win *winRAM) drawSnapshotInfo(current, snapshot uint8) {
+	imgui.BeginTooltip()
+	imgui.Text(fmt.Sprintf("%02x -> %02x", snapshot, current))
+	imgui.EndTooltip()
 }

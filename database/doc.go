@@ -12,10 +12,6 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 // Package database is a very simple way of storing structured and arbitrary
 // entry types. It's as simple as simple can be but is still useful in helping
@@ -35,9 +31,9 @@
 // ActivityCreating is treated the same as ActivityModifying. If we don't want
 // to modify the database at all, then we can use ActivityReading.
 //
-// The third argument is the datbase initialisation function. An important part
+// The third argument is the database initialisation function. An important part
 // of this database package is its ability to handle arbitrary entry types. The
-// initialisation function takes a pointer to the new datbase session as its
+// initialisation function takes a pointer to the new database session as its
 // sole argument:
 //
 //	func initSession(db *database.Session) {
@@ -53,7 +49,7 @@
 // The deserialise function takes an array of strings as it's only argument and
 // returns a new database.Entry and any errors. Database entries are
 // deserialised as part of the StartSession() function. Any errors created by
-// the deserialiser function cause the StartSession() to fail and to propogate
+// the deserialiser function cause the StartSession() to fail and to propagate
 // the error outwards.
 //
 //	func deserialiseFoo(fields []string) (database.Entry, error) {

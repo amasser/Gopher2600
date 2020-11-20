@@ -12,10 +12,6 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Gopher2600.  If not, see <https://www.gnu.org/licenses/>.
-//
-// *** NOTE: all historical versions of this file, as found in any
-// git repository, are also covered by the licence, even when this
-// notice is not present ***
 
 package disassembly
 
@@ -24,16 +20,18 @@ import (
 	"fmt"
 	"io"
 	"strings"
+
+	"github.com/jetsetilly/gopher2600/curated"
 )
 
-// GrepScope limits the scope of the search
+// GrepScope limits the scope of the search.
 type GrepScope int
 
-// List of available scopes
+// List of available scopes.
 const (
-	GrepMnemonic GrepScope = iota
+	GrepAll GrepScope = iota
+	GrepMnemonic
 	GrepOperand
-	GrepAll
 )
 
 // Grep searches the disassembly for the specified search string.
@@ -44,28 +42,31 @@ func (dsm *Disassembly) Grep(output io.Writer, scope GrepScope, search string, c
 		search = strings.ToUpper(search)
 	}
 
-	for bank := 0; bank < len(dsm.reference); bank++ {
+	hasOutput := false
+
+	citr := dsm.NewCartIteration()
+	citr.Start()
+	for b, ok := citr.Start(); ok; b, ok = citr.Next() {
 		bankHeader := false
 
-		itr, _, err := dsm.NewIteration(EntryLevelBlessed, bank)
+		bitr, err := dsm.NewBankIteration(EntryLevelBlessed, b)
 		if err != nil {
-			return err
+			return curated.Errorf("grep: %v", err)
 		}
 
-		for d := itr.Start(); d != nil; d = itr.Next() {
-			// line representation of Instruction. we'll print this
-			// in case of a match
-			line := &bytes.Buffer{}
-			dsm.WriteEntry(line, WriteAttr{}, d)
+		for _, e := bitr.Start(); e != nil; _, e = bitr.Next() {
+			// string representation of disasm entry
+			l := &bytes.Buffer{}
+			dsm.WriteEntry(l, WriteAttr{}, e)
 
 			// limit scope of grep to the correct Instruction field
 			switch scope {
 			case GrepMnemonic:
-				s = d.Mnemonic
+				s = e.Mnemonic
 			case GrepOperand:
-				s = d.Operand
+				s = e.String()
 			case GrepAll:
-				s = line.String()
+				s = l.String()
 			}
 
 			if !caseSensitive {
@@ -75,20 +76,20 @@ func (dsm *Disassembly) Grep(output io.Writer, scope GrepScope, search string, c
 			}
 
 			if strings.Contains(m, search) {
-
 				// if we've not yet printed head for the current bank then
 				// print it now
 				if !bankHeader {
-					if bank > 0 {
+					if hasOutput {
 						output.Write([]byte("\n"))
 					}
 
-					output.Write([]byte(fmt.Sprintf("--- bank %d ---\n", bank)))
+					output.Write([]byte(fmt.Sprintf("--- bank %d ---\n", b)))
 					bankHeader = true
+					hasOutput = true
 				}
 
-				// we've matched so print entire line
-				output.Write(line.Bytes())
+				// we've matched so print entire l
+				output.Write(l.Bytes())
 			}
 		}
 	}
